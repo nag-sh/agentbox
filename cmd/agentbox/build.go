@@ -92,20 +92,26 @@ The build process:
 			}
 
 			// Create builder.
+			// Run the build.
+			spinner := NewSpinner(fmt.Sprintf("Building OCI image %s", tag))
+			spinner.Start()
+
+			// Create builder.
 			b, err := builder.New(builder.Options{
 				Manifest:  m,
 				Tag:       tag,
 				Platform:  platform,
 				NoCache:   noCache,
 				Registry:  regClient,
+				LogFn: func(format string, a ...interface{}) {
+					spinner.SetMessage(fmt.Sprintf(format, a...))
+				},
 			})
 			if err != nil {
+				spinner.Stop(false, fmt.Sprintf("Builder initialization failed: %v", err))
 				return fmt.Errorf("creating builder: %w", err)
 			}
 
-			// Run the build.
-			spinner := NewSpinner(fmt.Sprintf("Building OCI image %s from %s", tag, manifestFile))
-			spinner.Start()
 			start := time.Now()
 			result2, err := b.Build(cmd.Context())
 			elapsed := time.Since(start)

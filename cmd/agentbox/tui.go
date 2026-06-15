@@ -95,6 +95,7 @@ func RenderError(err error) {
 // Spinner represents a TUI loading spinner.
 type Spinner struct {
 	message string
+	mu      sync.RWMutex
 	done    chan struct{}
 	wg      sync.WaitGroup
 	isTTY   bool
@@ -114,7 +115,10 @@ func NewSpinner(message string) *Spinner {
 // Start starts the spinner animation.
 func (s *Spinner) Start() {
 	if !s.isTTY {
-		fmt.Fprintf(s.writer, "⌛ %s...\n", s.message)
+		s.mu.RLock()
+		msg := s.message
+		s.mu.RUnlock()
+		fmt.Fprintf(s.writer, "⌛ %s...\n", msg)
 		return
 	}
 
@@ -135,13 +139,26 @@ func (s *Spinner) Start() {
 				fmt.Fprint(s.writer, "\r\033[K")
 				return
 			default:
+				s.mu.RLock()
+				msg := s.message
+				s.mu.RUnlock()
 				frame := lipgloss.NewStyle().Foreground(colorInfo).Render(frames[i])
-				fmt.Fprintf(s.writer, "\r%s  %s", frame, s.message)
+				fmt.Fprintf(s.writer, "\r%s  %s", frame, msg)
 				i = (i + 1) % len(frames)
 				time.Sleep(80 * time.Millisecond)
 			}
 		}
 	}()
+}
+
+// SetMessage updates the spinner message thread-safely.
+func (s *Spinner) SetMessage(message string) {
+	s.mu.Lock()
+	s.message = message
+	s.mu.Unlock()
+	if !s.isTTY {
+		fmt.Fprintf(s.writer, "⌛ %s...\n", message)
+	}
 }
 
 // Stop stops the spinner and prints a final status.

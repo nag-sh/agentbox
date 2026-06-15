@@ -23,6 +23,7 @@ type Options struct {
 	Platform string
 	NoCache  bool
 	Registry *registry.Client
+	LogFn    func(string, ...interface{})
 }
 
 // Result contains information about a built image.
@@ -80,6 +81,9 @@ func New(opts Options) (*Builder, error) {
 // Build executes the image build pipeline.
 func (b *Builder) Build(ctx context.Context) (*Result, error) {
 	// 1. Pull base image
+	if b.opts.LogFn != nil {
+		b.opts.LogFn("Pulling base image: %s", b.opts.Manifest.Spec.OS.Base)
+	}
 	baseImg, err := b.opts.Registry.PullImage(ctx, b.opts.Manifest.Spec.OS.Base)
 	if err != nil {
 		return nil, fmt.Errorf("pulling base image %q: %w", b.opts.Manifest.Spec.OS.Base, err)
@@ -95,9 +99,16 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 		}
 		harnessRef = fmt.Sprintf("%s-%s", harnessRef, arch)
 		
+		if b.opts.LogFn != nil {
+			b.opts.LogFn("Pulling harness image: %s", harnessRef)
+		}
 		harnessImg, err := b.opts.Registry.PullImage(ctx, harnessRef)
 		if err != nil {
 			return nil, fmt.Errorf("pulling harness image %q: %w", harnessRef, err)
+		}
+		
+		if b.opts.LogFn != nil {
+			b.opts.LogFn("Resolving harness layers...")
 		}
 		harnessLayers, err := harnessImg.Layers()
 		if err != nil {
@@ -116,6 +127,9 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 	// 3. Resolve Skills/Plugins/MCP (stubbed for now)
 	
 	// 4. Construct Agentbox specific layers
+	if b.opts.LogFn != nil {
+		b.opts.LogFn("Generating configuration files (runtime.yaml, guardrails.yaml)...")
+	}
 	files := make(map[string][]byte)
 
 	// Note: The base OS image and the harnesses are pulled from the registry.
@@ -134,18 +148,27 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 		files[k] = v
 	}
 	
+	if b.opts.LogFn != nil {
+		b.opts.LogFn("Creating OCI configuration layer...")
+	}
 	configLayer, err := CreateLayerFromFiles(files)
 	if err != nil {
 		return nil, fmt.Errorf("creating config layer: %w", err)
 	}
 
 	// 5. Apply layers to base image
+	if b.opts.LogFn != nil {
+		b.opts.LogFn("Assembling OCI image layers...")
+	}
 	img, err := AppendLayers(baseImg, configLayer)
 	if err != nil {
 		return nil, fmt.Errorf("appending config layer: %w", err)
 	}
 
 	// 6. Mutate image config (env, entrypoint, etc)
+	if b.opts.LogFn != nil {
+		b.opts.LogFn("Applying metadata configurations (env, entrypoint)...")
+	}
 	cfg, err := img.ConfigFile()
 	if err != nil {
 		return nil, fmt.Errorf("reading image config: %w", err)
@@ -184,6 +207,9 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 	}
 	
 	// Get final digest
+	if b.opts.LogFn != nil {
+		b.opts.LogFn("Calculating final image digest...")
+	}
 	digest, err := img.Digest()
 	if err != nil {
 		return nil, fmt.Errorf("calculating image digest: %w", err)

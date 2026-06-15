@@ -74,18 +74,23 @@ be passed through from the host.`,
 					return fmt.Errorf("creating registry client: %w", err)
 				}
 				
+				spinner := NewSpinner(fmt.Sprintf("Building OCI image %s", tag))
+				spinner.Start()
+
 				// Create builder
 				b, err := builder.New(builder.Options{
 					Manifest: m,
 					Tag:      tag,
 					Registry: regClient,
+					LogFn: func(format string, a ...interface{}) {
+						spinner.SetMessage(fmt.Sprintf(format, a...))
+					},
 				})
 				if err != nil {
+					spinner.Stop(false, fmt.Sprintf("Builder initialization failed: %v", err))
 					return fmt.Errorf("creating builder: %w", err)
 				}
 				
-				spinner := NewSpinner(fmt.Sprintf("Building OCI image %s", tag))
-				spinner.Start()
 				start := time.Now()
 				buildRes, err := b.Build(cmd.Context())
 				elapsed := time.Since(start)

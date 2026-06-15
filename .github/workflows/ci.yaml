@@ -38,11 +38,12 @@ jobs:
       - name: Install apko
         run: go install chainguard.dev/apko@latest
 
-      - name: Validate apko configurations (dry-run build)
+      - name: Validate apko configurations
         run: |
-          # Verify apko files compile / parse cleanly without pushing
-          apko build library/os/base/base.yaml base-test.tar --arch x86_64 --dry-run
-          apko build library/os/tools/tools.yaml tools-test.tar --arch x86_64 --dry-run
+          # Verify apko files compile / parse cleanly
+          apko build library/os/base/base.yaml base-test.tar --arch x86_64
+          apko build library/os/tools/tools.yaml tools-test.tar --arch x86_64
+          rm -f base-test.tar tools-test.tar
 
       - name: Build Agentbox CLI
         run: go build -o bin/agentbox ./cmd/agentbox

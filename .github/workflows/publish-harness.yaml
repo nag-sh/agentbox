@@ -93,16 +93,9 @@ jobs:
                 --artifact-type application/vnd.agentbox.harness.v1+tar.gzip \
                 stage-arm64.tar.gz
               
-              # --- Stitch Multi-Arch ---
-              docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION \
-                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-amd64 \
-                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-arm64
-              docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION
-              
-              docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:latest \
-                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-amd64 \
-                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-arm64
-              docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:latest
+              # --- Tag latest ---
+              oras tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-amd64 latest-amd64
+              oras tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-arm64 latest-arm64
               
               # Clean up
               rm -rf dist-amd64 dist-arm64 stage-amd64 stage-arm64 stage-amd64.tar.gz stage-arm64.tar.gz

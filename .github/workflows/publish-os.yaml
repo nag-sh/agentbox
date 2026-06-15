@@ -84,8 +84,10 @@ jobs:
       - name: Build and Push Base (Single Arch)
         run: |
           APKO_ARCH="x86_64"
+          PLATFORM="linux/amd64"
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             APKO_ARCH="aarch64"
+            PLATFORM="linux/arm64"
           fi
           
           apko publish library/os/base/base.yaml \
@@ -100,7 +102,8 @@ jobs:
           crane append \
             -b ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }} \
             -f init-layer.tar \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }}
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }} \
+            --platform $PLATFORM
 
           crane tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }} sha-${{ env.SHA_SHORT }}-${{ matrix.arch }}
           crane tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }} latest-${{ matrix.arch }}
@@ -108,8 +111,10 @@ jobs:
       - name: Build and Push Tools (Single Arch)
         run: |
           APKO_ARCH="x86_64"
+          PLATFORM="linux/amd64"
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             APKO_ARCH="aarch64"
+            PLATFORM="linux/arm64"
           fi
           
           apko publish library/os/tools/tools.yaml \
@@ -124,7 +129,8 @@ jobs:
           crane append \
             -b ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }} \
             -f init-layer-tools.tar \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }}
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }} \
+            --platform $PLATFORM
 
           crane tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }} sha-${{ env.SHA_SHORT }}-${{ matrix.arch }}
           crane tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }} latest-${{ matrix.arch }}

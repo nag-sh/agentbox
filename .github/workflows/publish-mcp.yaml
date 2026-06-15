@@ -65,46 +65,9 @@ jobs:
                 --artifact-type application/vnd.agentbox.mcp-server.v1+tar.gzip \
                 stage-$NAME-${{ matrix.arch }}.tar.gz
                 
+              oras tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/mcp/$NAME:$VERSION-${{ matrix.arch }} latest-${{ matrix.arch }}
+                
               # Clean up stage
               rm -rf stage-$NAME stage-$NAME-${{ matrix.arch }}.tar.gz $dir/fetch-server
-            fi
-          done
-
-  manifest-mcp:
-    name: Create Multi-Arch MCP Manifests
-    needs: build-mcp
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Stitch Manifests
-        run: |
-          for dir in library/mcp/*; do
-            if [ -d "$dir" ] && [ -f "$dir/mcp.yaml" ]; then
-              NAME=$(grep -E "^name:" $dir/mcp.yaml | head -n 1 | awk '{print $2}')
-              VERSION=$(grep -E "^version:" $dir/mcp.yaml | head -n 1 | awk '{print $2}')
-              
-              echo "Stitching manifest for MCP server: $NAME version $VERSION"
-              
-              docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/mcp/$NAME:$VERSION \
-                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/mcp/$NAME:$VERSION-amd64 \
-                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/mcp/$NAME:$VERSION-arm64
-              docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/mcp/$NAME:$VERSION
-              
-              docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/mcp/$NAME:latest \
-                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/mcp/$NAME:$VERSION-amd64 \
-                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/mcp/$NAME:$VERSION-arm64
-              docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/mcp/$NAME:latest
             fi
           done

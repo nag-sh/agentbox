@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -84,7 +85,34 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 		return nil, fmt.Errorf("pulling base image %q: %w", b.opts.Manifest.Spec.OS.Base, err)
 	}
 
-	// 2. Resolve Harness and fetch it (stubbed for now - would use ArtifactStore)
+	// 2. Resolve Harness and fetch it
+	harnessRef := b.opts.Manifest.Spec.Harness.Source
+	if harnessRef != "" {
+		arch := "amd64"
+		if b.opts.Platform != "" {
+			parts := strings.Split(b.opts.Platform, "/")
+			arch = parts[len(parts)-1]
+		}
+		harnessRef = fmt.Sprintf("%s-%s", harnessRef, arch)
+		
+		harnessImg, err := b.opts.Registry.PullImage(ctx, harnessRef)
+		if err != nil {
+			return nil, fmt.Errorf("pulling harness image %q: %w", harnessRef, err)
+		}
+		harnessLayers, err := harnessImg.Layers()
+		if err != nil {
+			return nil, fmt.Errorf("reading harness layers: %w", err)
+		}
+		cleanLayers, err := CleanLayers(harnessLayers)
+		if err != nil {
+			return nil, fmt.Errorf("cleaning harness layers: %w", err)
+		}
+		baseImg, err = AppendLayers(baseImg, cleanLayers...)
+		if err != nil {
+			return nil, fmt.Errorf("appending harness layers: %w", err)
+		}
+	}
+
 	// 3. Resolve Skills/Plugins/MCP (stubbed for now)
 	
 	// 4. Construct Agentbox specific layers

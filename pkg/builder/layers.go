@@ -224,3 +224,18 @@ func stringsSplit(s, sep string) []string {
 	res = append(res, s[start:])
 	return res
 }
+
+// CleanLayers converts a slice of custom layers into standard OCI layers.
+func CleanLayers(layers []v1.Layer) ([]v1.Layer, error) {
+	var clean []v1.Layer
+	for _, l := range layers {
+		cl, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
+			return l.Uncompressed()
+		})
+		if err != nil {
+			return nil, fmt.Errorf("cleaning layer: %w", err)
+		}
+		clean = append(clean, cl)
+	}
+	return clean, nil
+}

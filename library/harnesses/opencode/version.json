@@ -4,7 +4,7 @@
   "repo": "anomalyco/opencode",
   "binary": "opencode",
   "assets": {
-    "linux-amd64": "opencode-linux-amd64",
-    "linux-arm64": "opencode-linux-arm64"
+    "linux-amd64": "opencode-linux-x64.tar.gz",
+    "linux-arm64": "opencode-linux-arm64.tar.gz"
   }
 }

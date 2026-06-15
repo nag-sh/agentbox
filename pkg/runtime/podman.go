@@ -363,9 +363,7 @@ func formatMount(m Mount) string {
 		parts = append(parts, "source="+m.Source)
 	}
 	parts = append(parts, "target="+m.Target)
-	for _, opt := range m.Options {
-		parts = append(parts, opt)
-	}
+	parts = append(parts, m.Options...)
 	return strings.Join(parts, ",")
 }
 

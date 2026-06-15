@@ -125,6 +125,7 @@ func (s *ArtifactStore) PushArtifact(ctx context.Context, ref string, artifactTy
 	}
 	defer fs.Close()
 
+	//lint:ignore SA1019 We use oras.Pack for compatibility
 	desc, err := oras.Pack(ctx, fs, string(artifactType), nil, oras.PackOptions{
 		PackImageManifest: true,
 	})

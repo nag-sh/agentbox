@@ -88,9 +88,8 @@ jobs:
             APKO_ARCH="aarch64"
           fi
           
-          apko build library/os/base/base.yaml \
+          apko publish library/os/base/base.yaml \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }} \
-            base-${{ matrix.arch }}.tar \
             --arch $APKO_ARCH
             
           mkdir -p build/opt/agentbox/bin
@@ -113,9 +112,8 @@ jobs:
             APKO_ARCH="aarch64"
           fi
           
-          apko build library/os/tools/tools.yaml \
+          apko publish library/os/tools/tools.yaml \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }} \
-            tools-${{ matrix.arch }}.tar \
             --arch $APKO_ARCH
 
           mkdir -p build-tools/opt/agentbox/bin

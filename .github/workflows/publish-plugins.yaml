@@ -1,0 +1,56 @@
+name: Publish Plugins
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'library/plugins/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: nag-sh/agentbox
+
+jobs:
+  publish-plugins:
+    name: Package and Publish Plugins
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ORAS CLI
+        uses: oras-project/setup-oras@v1
+
+      - name: Process and Publish
+        run: |
+          for dir in library/plugins/*; do
+            if [ -d "$dir" ] && [ -f "$dir/plugin.yaml" ]; then
+              NAME=$(grep -E "^name:" $dir/plugin.yaml | head -n 1 | awk '{print $2}')
+              VERSION=$(grep -E "^version:" $dir/plugin.yaml | head -n 1 | awk '{print $2}')
+              
+              echo "Processing plugin: $NAME version $VERSION"
+              
+              # Stage and tar.gz plugin contents
+              tar -czf plugin-$NAME.tar.gz -C $dir .
+              
+              oras push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/plugin/$NAME:$VERSION \
+                --artifact-type application/vnd.agentbox.plugin.v1+tar.gzip \
+                plugin-$NAME.tar.gz
+                
+              oras tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/plugin/$NAME:$VERSION latest
+                
+              rm -f plugin-$NAME.tar.gz
+            fi
+          done

@@ -36,8 +36,8 @@ spec:
 
   # Plugin configuration
   plugins:
-    - name: "oh-my-openagent"
-      source: "ghcr.io/nag-sh/agentbox/plugin/oh-my-openagent:v1"
+    - name: "opencode-kimi-full"
+      source: "ghcr.io/nag-sh/agentbox/plugin/opencode-kimi-full:v1.0.0"
       config:
         theme: "dark"
         autoSave: true

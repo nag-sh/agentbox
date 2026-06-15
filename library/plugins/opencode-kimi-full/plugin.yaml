@@ -1,0 +1,4 @@
+name: opencode-kimi-full
+version: v1.0.0
+description: "Moonshot AI Kimi Code plugin for OpenCode, providing Kimi OAuth device-flow and client parity."
+entrypoint: "index.js"

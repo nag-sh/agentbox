@@ -75,8 +75,6 @@ The build process:
 				tag = fmt.Sprintf("agentbox/%s:%s", m.Metadata.Name, m.Metadata.Version)
 			}
 
-			fmt.Fprintf(os.Stderr, "Building image %s from %s...\n", tag, manifestFile)
-
 			if dryRun {
 				fmt.Fprintf(os.Stderr, "Dry run — no image will be built.\n")
 				fmt.Fprintf(os.Stderr, "  Base:    %s\n", m.Spec.OS.Base)
@@ -106,38 +104,49 @@ The build process:
 			}
 
 			// Run the build.
+			spinner := NewSpinner(fmt.Sprintf("Building OCI image %s from %s", tag, manifestFile))
+			spinner.Start()
 			start := time.Now()
 			result2, err := b.Build(cmd.Context())
+			elapsed := time.Since(start)
 			if err != nil {
+				spinner.Stop(false, fmt.Sprintf("Build failed: %v", err))
 				return fmt.Errorf("build failed: %w", err)
 			}
-
-			elapsed := time.Since(start)
+			spinner.Stop(true, fmt.Sprintf("Built image %s (%s)", tag, elapsed.Round(time.Millisecond)))
 
 			if local {
 				outPath := output
 				if outPath == "" {
 					outPath = fmt.Sprintf("%s-%s.tar", m.Metadata.Name, m.Metadata.Version)
 				}
+				saveSpinner := NewSpinner(fmt.Sprintf("Saving image to OCI tarball %s", outPath))
+				saveSpinner.Start()
 				if err := result2.SaveLocal(cmd.Context(), outPath); err != nil {
+					saveSpinner.Stop(false, fmt.Sprintf("Save failed: %v", err))
 					return fmt.Errorf("saving local image: %w", err)
 				}
-				fmt.Fprintf(os.Stderr, "Image saved to %s (%s)\n", outPath, elapsed.Round(time.Millisecond))
+				saveSpinner.Stop(true, fmt.Sprintf("Image saved to %s", outPath))
 			}
 
 			if push {
+				pushSpinner := NewSpinner(fmt.Sprintf("Pushing image %s to registry", tag))
+				pushSpinner.Start()
 				if err := result2.Push(cmd.Context()); err != nil {
+					pushSpinner.Stop(false, fmt.Sprintf("Push failed: %v", err))
 					return fmt.Errorf("pushing image: %w", err)
 				}
-				fmt.Fprintf(os.Stderr, "Image pushed to %s (%s)\n", tag, elapsed.Round(time.Millisecond))
+				pushSpinner.Stop(true, fmt.Sprintf("Image pushed to %s", tag))
 			}
 
 			if load {
-				fmt.Fprintf(os.Stderr, "Loading image into local runtime...\n")
+				loadSpinner := NewSpinner("Loading image into local runtime daemon")
+				loadSpinner.Start()
 				
 				// Create a temporary file for the tarball
 				tmpFile, err := os.CreateTemp("", "agentbox-*.tar")
 				if err != nil {
+					loadSpinner.Stop(false, fmt.Sprintf("Temp file creation failed: %v", err))
 					return fmt.Errorf("creating temp file for load: %w", err)
 				}
 				tmpPath := tmpFile.Name()
@@ -146,6 +155,7 @@ The build process:
 
 				// Save the image
 				if err := result2.SaveLocal(cmd.Context(), tmpPath); err != nil {
+					loadSpinner.Stop(false, fmt.Sprintf("Saving image failed: %v", err))
 					return fmt.Errorf("saving image for load: %w", err)
 				}
 
@@ -156,20 +166,22 @@ The build process:
 						importRuntime, err = runtime.ForName(runtimeName)
 					}
 					if err != nil {
+						loadSpinner.Stop(false, fmt.Sprintf("Runtime detection failed: %v", err))
 						return fmt.Errorf("detecting runtime for load: %w", err)
 					}
 				}
 
 				if err := importRuntime.Import(cmd.Context(), tmpPath, tag); err != nil {
+					loadSpinner.Stop(false, fmt.Sprintf("Runtime import failed: %v", err))
 					return fmt.Errorf("importing image into runtime %s: %w", importRuntime.Name(), err)
 				}
-				fmt.Fprintf(os.Stderr, "Image loaded into %s: %s (%s)\n", importRuntime.Name(), tag, elapsed.Round(time.Millisecond))
+				loadSpinner.Stop(true, fmt.Sprintf("Image loaded into %s: %s", importRuntime.Name(), tag))
 			}
 
 			if !local && !push && !load {
-				fmt.Fprintf(os.Stderr, "Image built in memory: %s (digest: %s, %s)\n",
-					tag, result2.Digest, elapsed.Round(time.Millisecond))
-				fmt.Fprintf(os.Stderr, "Tip: Use --load to import into your local docker/podman runtime.\n")
+				LogInfo("Image built in memory: %s", tag)
+				LogInfo("Digest: %s", result2.Digest)
+				LogInfo("Tip: Use --load to import into your local docker/podman runtime.")
 			}
 
 			return nil

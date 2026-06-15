@@ -4,9 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/nag-sh/agentbox/pkg/builder"
+	"github.com/nag-sh/agentbox/pkg/manifest"
+	"github.com/nag-sh/agentbox/pkg/registry"
 	"github.com/nag-sh/agentbox/pkg/runtime"
 )
 
@@ -41,6 +45,97 @@ be passed through from the host.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			imageRef := args[0]
 
+			// Check if the argument is a YAML manifest
+			ext := filepath.Ext(imageRef)
+			if ext == ".yaml" || ext == ".yml" {
+				manifestFile := imageRef
+				LogInfo("Detected manifest file %s. Performing runtime build...", manifestFile)
+				
+				// Load and validate manifest
+				m, err := manifest.LoadFile(manifestFile)
+				if err != nil {
+					return fmt.Errorf("loading manifest: %w", err)
+				}
+				
+				baseDir := filepath.Dir(manifestFile)
+				manifest.ResolveLocalPaths(m, baseDir)
+				
+				result := manifest.Validate(m)
+				if !result.IsValid() {
+					return fmt.Errorf("%s", result.Error())
+				}
+				
+				// Auto-generate tag
+				tag := fmt.Sprintf("agentbox/%s:%s", m.Metadata.Name, m.Metadata.Version)
+				
+				// Create registry client
+				regClient, err := registry.NewClient(registry.ClientOptions{})
+				if err != nil {
+					return fmt.Errorf("creating registry client: %w", err)
+				}
+				
+				// Create builder
+				b, err := builder.New(builder.Options{
+					Manifest: m,
+					Tag:      tag,
+					Registry: regClient,
+				})
+				if err != nil {
+					return fmt.Errorf("creating builder: %w", err)
+				}
+				
+				spinner := NewSpinner(fmt.Sprintf("Building OCI image %s", tag))
+				spinner.Start()
+				start := time.Now()
+				buildRes, err := b.Build(cmd.Context())
+				elapsed := time.Since(start)
+				if err != nil {
+					spinner.Stop(false, fmt.Sprintf("Runtime build failed: %v", err))
+					return fmt.Errorf("runtime build failed: %w", err)
+				}
+				spinner.Stop(true, fmt.Sprintf("Built image %s (%s)", tag, elapsed.Round(time.Millisecond)))
+				
+				// Detect runtime
+				var rt runtime.Runtime
+				if runtimeName != "" {
+					rt, err = runtime.ForName(runtimeName)
+				} else {
+					rt, err = runtime.Detect(cmd.Context())
+				}
+				if err != nil {
+					return fmt.Errorf("container runtime: %w", err)
+				}
+				
+				loadSpinner := NewSpinner(fmt.Sprintf("Importing image into local %s runtime", rt.Name()))
+				loadSpinner.Start()
+				
+				// Create a temporary file for the tarball
+				tmpFile, err := os.CreateTemp("", "agentbox-*.tar")
+				if err != nil {
+					loadSpinner.Stop(false, fmt.Sprintf("Temp file creation failed: %v", err))
+					return fmt.Errorf("creating temp file for load: %w", err)
+				}
+				tmpPath := tmpFile.Name()
+				tmpFile.Close()
+				defer os.Remove(tmpPath)
+				
+				// Save the image
+				if err := buildRes.SaveLocal(cmd.Context(), tmpPath); err != nil {
+					loadSpinner.Stop(false, fmt.Sprintf("Saving image failed: %v", err))
+					return fmt.Errorf("saving image for load: %w", err)
+				}
+				
+				// Import into runtime
+				if err := rt.Import(cmd.Context(), tmpPath, tag); err != nil {
+					loadSpinner.Stop(false, fmt.Sprintf("Runtime import failed: %v", err))
+					return fmt.Errorf("importing image into runtime %s: %w", rt.Name(), err)
+				}
+				loadSpinner.Stop(true, fmt.Sprintf("Image imported into %s: %s", rt.Name(), tag))
+				
+				// Use the built tag as the image reference to run
+				imageRef = tag
+			}
+
 			// Resolve workspace to absolute path.
 			absWorkspace, err := filepath.Abs(workspace)
 			if err != nil {
@@ -67,7 +162,7 @@ be passed through from the host.`,
 				return fmt.Errorf("container runtime: %w", err)
 			}
 
-			fmt.Fprintf(os.Stderr, "Using runtime: %s\n", rt.Name())
+			LogInfo("Launching container image %s using %s runtime...", imageRef, rt.Name())
 
 			// Build environment map.
 			env := make(map[string]string)

@@ -1,0 +1,58 @@
+name: Publish Skills
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'library/skills/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: nag-sh/agentbox
+
+jobs:
+  publish-skills:
+    name: Package and Publish Skills
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ORAS CLI
+        uses: oras-project/setup-oras-action@v1
+
+      - name: Process and Publish
+        run: |
+          for dir in library/skills/*; do
+            if [ -d "$dir" ] && [ -f "$dir/skill.yaml" ]; then
+              NAME=$(grep -E "^name:" $dir/skill.yaml | head -n 1 | awk '{print $2}')
+              VERSION=$(grep -E "^version:" $dir/skill.yaml | head -n 1 | awk '{print $2}')
+              
+              echo "Processing skill: $NAME version $VERSION"
+              
+              # Stage and tar.gz skill contents
+              tar -czf skill-$NAME.tar.gz -C $dir .
+              
+              oras push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/skill/$NAME:$VERSION \
+                --artifact-type application/vnd.agentbox.skill.v1+tar.gzip \
+                skill-$NAME.tar.gz
+                
+              oras push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/skill/$NAME:latest \
+                --artifact-type application/vnd.agentbox.skill.v1+tar.gzip \
+                skill-$NAME.tar.gz
+                
+              rm -f skill-$NAME.tar.gz
+            fi
+          done

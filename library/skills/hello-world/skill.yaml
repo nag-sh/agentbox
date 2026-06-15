@@ -1,0 +1,6 @@
+name: hello-world
+version: v1.0.0
+description: "A trivial skill to validate the pipeline"
+dependencies: []
+requiredMCP: []
+env: []

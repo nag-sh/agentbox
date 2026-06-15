@@ -1,0 +1,187 @@
+name: Publish OS Layers
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'library/os/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: nag-sh/agentbox
+
+jobs:
+  build-init:
+    name: Build agentbox-init
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Build init binary
+        run: |
+          GOARCH_VAL=${{ matrix.arch }}
+          CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH_VAL go build -o agentbox-init-${{ matrix.arch }} ./library/os/base/agentbox-init
+
+      - name: Upload init binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentbox-init-${{ matrix.arch }}
+          path: agentbox-init-${{ matrix.arch }}
+
+  build-os:
+    name: Build OS Base and Tools
+    needs: build-init
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download init binary
+        uses: actions/download-artifact@v4
+        with:
+          name: agentbox-init-${{ matrix.arch }}
+          path: .
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Install apko and crane
+        run: |
+          go install chainguard.dev/apko@latest
+          go install github.com/google/go-containerregistry/cmd/crane@latest
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Environment Variables
+        run: |
+          echo "CALVER=$(date +'%Y.%m.%d')" >> $GITHUB_ENV
+          echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Build and Push Base (Single Arch)
+        run: |
+          APKO_ARCH="x86_64"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            APKO_ARCH="aarch64"
+          fi
+          
+          apko build library/os/base/base.yaml \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }} \
+            base-${{ matrix.arch }}.tar \
+            --arch $APKO_ARCH
+            
+          mkdir -p build/opt/agentbox/bin
+          cp agentbox-init-${{ matrix.arch }} build/opt/agentbox/bin/agentbox-init
+          chmod +x build/opt/agentbox/bin/agentbox-init
+          tar -C build -cvf init-layer.tar opt
+          
+          crane append \
+            -b ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }} \
+            -f init-layer.tar \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }}
+
+          crane tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }} sha-${{ env.SHA_SHORT }}-${{ matrix.arch }}
+          crane tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-${{ matrix.arch }} latest-${{ matrix.arch }}
+
+      - name: Build and Push Tools (Single Arch)
+        run: |
+          APKO_ARCH="x86_64"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            APKO_ARCH="aarch64"
+          fi
+          
+          apko build library/os/tools/tools.yaml \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }} \
+            tools-${{ matrix.arch }}.tar \
+            --arch $APKO_ARCH
+
+          mkdir -p build-tools/opt/agentbox/bin
+          cp agentbox-init-${{ matrix.arch }} build-tools/opt/agentbox/bin/agentbox-init
+          chmod +x build-tools/opt/agentbox/bin/agentbox-init
+          tar -C build-tools -cvf init-layer-tools.tar opt
+          
+          crane append \
+            -b ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }} \
+            -f init-layer-tools.tar \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }}
+
+          crane tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }} sha-${{ env.SHA_SHORT }}-${{ matrix.arch }}
+          crane tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-${{ matrix.arch }} latest-${{ matrix.arch }}
+
+  manifest:
+    name: Create Multi-Arch Manifests
+    needs: build-os
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Environment Variables
+        run: |
+          echo "CALVER=$(date +'%Y.%m.%d')" >> $GITHUB_ENV
+          echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Stitch Base and Tools Manifests
+        run: |
+          docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}-arm64
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:${{ env.CALVER }}
+          
+          docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:latest \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:latest-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:latest-arm64
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:latest
+
+          docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:sha-${{ env.SHA_SHORT }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:sha-${{ env.SHA_SHORT }}-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:sha-${{ env.SHA_SHORT }}-arm64
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/base:sha-${{ env.SHA_SHORT }}
+
+          docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}-arm64
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:${{ env.CALVER }}
+          
+          docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:latest \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:latest-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:latest-arm64
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:latest
+
+          docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:sha-${{ env.SHA_SHORT }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:sha-${{ env.SHA_SHORT }}-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:sha-${{ env.SHA_SHORT }}-arm64
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/os/tools:sha-${{ env.SHA_SHORT }}

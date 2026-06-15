@@ -1,0 +1,10 @@
+{
+  "name": "goose",
+  "version": "v1.0.32",
+  "repo": "block/goose",
+  "binary": "goose",
+  "assets": {
+    "linux-amd64": "goose-x86_64-unknown-linux-gnu.tar.bz2",
+    "linux-arm64": "goose-aarch64-unknown-linux-gnu.tar.bz2"
+  }
+}

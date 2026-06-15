@@ -1,0 +1,10 @@
+name: fetch
+version: v1.0.0
+transport: stdio
+command: /opt/agentbox/mcp/fetch/fetch-server
+healthCheck:
+  command: "/opt/agentbox/mcp/fetch/fetch-server --health"
+  interval: 10s
+  timeout: 5s
+  retries: 3
+env: {}

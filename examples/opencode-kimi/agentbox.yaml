@@ -1,0 +1,82 @@
+apiVersion: agentbox/v1
+kind: AgentImage
+metadata:
+  name: "opencode-kimi-agent"
+  version: "1.0.0"
+  description: "OpenCode agent configured with Kimi and OpenCode Go providers via OAuth, plus the oh-my-openagent plugin"
+  author: "User"
+  labels:
+    purpose: "coding-assistant"
+    environment: "development"
+
+spec:
+  # Base OS configuration
+  os:
+    base: "ghcr.io/nag-sh/agentbox/os/tools:latest"
+    packages: []
+
+  # Harness configuration
+  harness:
+    name: "opencode"
+    version: "v1.17.7"
+    source: "ghcr.io/nag-sh/agentbox/harness/opencode:v1.17.7"
+
+  # Model configuration
+  # For OpenCode with custom OAuth providers like Kimi or OpenCode Go, 
+  # we use the "custom" provider and pass the details in environment variables or parameters.
+  model:
+    provider: "custom"
+    name: "kimi"
+    # Using OAuth, we might not need a static API key, but we can pass the auth token via ENV
+    apiKeyEnv: "KIMI_OAUTH_TOKEN"
+    baseURL: "https://api.moonshot.cn/v1"
+    parameters:
+      temperature: 0.3
+      maxTokens: 4096
+
+  # Plugin configuration
+  plugins:
+    - name: "oh-my-openagent"
+      source: "ghcr.io/nag-sh/agentbox/plugin/oh-my-openagent:v1"
+      config:
+        theme: "dark"
+        autoSave: true
+
+  # Runtime execution rules
+  runtime:
+    user: "root"
+    workdir: "/workspace"
+    env:
+      # Injecting environment variables for OpenCode Go provider OAuth
+      OPENCODE_GO_OAUTH_CLIENT_ID: "client-id-here"
+      OPENCODE_DEFAULT_PROVIDER: "kimi"
+    
+  # Guardrails / Permissions
+  guardrails:
+    commands:
+      allow:
+        - "git *"
+        - "npm *"
+        - "node *"
+      deny:
+        - "sudo *"
+    filesystem:
+      readWrite:
+        - "/workspace"
+      readOnly:
+        - "/usr/local/bin"
+    network:
+      egress:
+        allowDomains:
+          - "*.github.com"
+          - "api.moonshot.cn" # Allow Kimi API access
+
+  # Tools and harness permissions
+  tools:
+    permissions:
+      - tool: "execute_command"
+        allow: true
+      - tool: "read_file"
+        allow: true
+      - tool: "write_file"
+        allow: true

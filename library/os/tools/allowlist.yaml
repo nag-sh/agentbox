@@ -1,0 +1,6 @@
+allowed:
+  - bash
+  - busybox
+  - ca-certificates-bundle
+  - curl
+  - git

@@ -1,0 +1,110 @@
+name: Publish Harnesses
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'library/harnesses/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: nag-sh/agentbox
+
+jobs:
+  publish-harnesses:
+    name: Package and Publish Harnesses
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ORAS CLI
+        uses: oras-project/setup-oras-action@v1
+
+      - name: Process and Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for dir in library/harnesses/*; do
+            if [ -d "$dir" ] && [ -f "$dir/version.json" ]; then
+              NAME=$(jq -r '.name' $dir/version.json)
+              VERSION=$(jq -r '.version' $dir/version.json)
+              REPO=$(jq -r '.repo' $dir/version.json)
+              BINARY=$(jq -r '.binary' $dir/version.json)
+              
+              echo "Processing harness: $NAME version $VERSION from $REPO"
+              
+              # --- amd64 ---
+              AMD64_ASSET=$(jq -r '.assets["linux-amd64"]' $dir/version.json)
+              mkdir -p dist-amd64
+              gh release download "$VERSION" --repo "$REPO" --pattern "$AMD64_ASSET" --dir dist-amd64
+              
+              if [[ "$AMD64_ASSET" == *.tar.gz || "$AMD64_ASSET" == *.tgz ]]; then
+                tar -xzf dist-amd64/$AMD64_ASSET -C dist-amd64
+              elif [[ "$AMD64_ASSET" == *.tar.bz2 || "$AMD64_ASSET" == *.tbz2 ]]; then
+                tar -xjf dist-amd64/$AMD64_ASSET -C dist-amd64
+              fi
+              
+              mkdir -p stage-amd64/usr/local/bin
+              find dist-amd64 -type f -name "$BINARY" -exec cp {} stage-amd64/usr/local/bin/$BINARY \;
+              if [ ! -f stage-amd64/usr/local/bin/$BINARY ]; then
+                # Assume it was not an archive and is the asset itself
+                cp dist-amd64/$AMD64_ASSET stage-amd64/usr/local/bin/$BINARY
+              fi
+              chmod +x stage-amd64/usr/local/bin/$BINARY
+              
+              tar -czf stage-amd64.tar.gz -C stage-amd64 .
+              oras push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-amd64 \
+                --artifact-type application/vnd.agentbox.harness.v1+tar.gzip \
+                stage-amd64.tar.gz
+              
+              # --- arm64 ---
+              ARM64_ASSET=$(jq -r '.assets["linux-arm64"]' $dir/version.json)
+              mkdir -p dist-arm64
+              gh release download "$VERSION" --repo "$REPO" --pattern "$ARM64_ASSET" --dir dist-arm64
+              
+              if [[ "$ARM64_ASSET" == *.tar.gz || "$ARM64_ASSET" == *.tgz ]]; then
+                tar -xzf dist-arm64/$ARM64_ASSET -C dist-arm64
+              elif [[ "$ARM64_ASSET" == *.tar.bz2 || "$ARM64_ASSET" == *.tbz2 ]]; then
+                tar -xjf dist-arm64/$ARM64_ASSET -C dist-arm64
+              fi
+              
+              mkdir -p stage-arm64/usr/local/bin
+              find dist-arm64 -type f -name "$BINARY" -exec cp {} stage-arm64/usr/local/bin/$BINARY \;
+              if [ ! -f stage-arm64/usr/local/bin/$BINARY ]; then
+                cp dist-arm64/$ARM64_ASSET stage-arm64/usr/local/bin/$BINARY
+              fi
+              chmod +x stage-arm64/usr/local/bin/$BINARY
+              
+              tar -czf stage-arm64.tar.gz -C stage-arm64 .
+              oras push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-arm64 \
+                --artifact-type application/vnd.agentbox.harness.v1+tar.gzip \
+                stage-arm64.tar.gz
+              
+              # --- Stitch Multi-Arch ---
+              docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION \
+                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-amd64 \
+                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-arm64
+              docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION
+              
+              docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:latest \
+                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-amd64 \
+                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:$VERSION-arm64
+              docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/harness/$NAME:latest
+              
+              # Clean up
+              rm -rf dist-amd64 dist-arm64 stage-amd64 stage-arm64 stage-amd64.tar.gz stage-arm64.tar.gz
+            fi
+          done

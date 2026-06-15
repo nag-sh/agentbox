@@ -31,7 +31,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install ORAS CLI
-        uses: oras-project/setup-oras-action@v1
+        uses: oras-project/setup-oras@v1
 
       - name: Process and Publish
         run: |

@@ -18,10 +18,12 @@ import (
 type ArtifactType string
 
 const (
-	ArtifactTypeSkill   ArtifactType = "application/vnd.agentbox.skill.v1+tar.gzip"
-	ArtifactTypePlugin  ArtifactType = "application/vnd.agentbox.plugin.v1+tar.gzip"
-	ArtifactTypeMCP     ArtifactType = "application/vnd.agentbox.mcp-server.v1+tar.gzip"
-	ArtifactTypeHarness ArtifactType = "application/vnd.agentbox.harness.v1+tar.gzip"
+	ArtifactTypeSkill       ArtifactType = "application/vnd.agentbox.skill.v1+tar.gzip"
+	ArtifactTypePlugin      ArtifactType = "application/vnd.agentbox.plugin.v1+tar.gzip"
+	ArtifactTypeMCP         ArtifactType = "application/vnd.agentbox.mcp-server.v1+tar.gzip"
+	ArtifactTypeHarness     ArtifactType = "application/vnd.agentbox.harness.v1+tar.gzip"
+	ArtifactTypeOCXConfig   ArtifactType = "application/vnd.ocx.component.config.v1+json"
+	ArtifactTypeOCXFiles    ArtifactType = "application/vnd.ocx.component.files.v1+tar.gzip"
 )
 
 // ParseArtifactType converts a string ("skill", "plugin", "mcp", "harness") to its full ArtifactType.

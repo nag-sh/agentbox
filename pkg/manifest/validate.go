@@ -67,6 +67,7 @@ func Validate(m *Manifest) *ValidationResult {
 	validateGPU(&m.Spec.GPU, result)
 	validateSecrets(&m.Spec.Secrets, result)
 	validateRuntime(&m.Spec.Runtime, result)
+	validateOCX(&m.Spec.OCX, result)
 
 	return result
 }
@@ -353,6 +354,28 @@ func validateOCIRef(ref, field string, r *ValidationResult) {
 	// Basic OCI reference validation: must contain at least a registry/repo pattern.
 	if !strings.Contains(ref, "/") {
 		r.addError(field, fmt.Sprintf("invalid OCI reference %q (expected registry/repo:tag format)", ref))
+	}
+}
+
+func validateOCX(o *OCXSpec, r *ValidationResult) {
+	for alias, reg := range o.Registries {
+		if reg.URL == "" {
+			r.addError(fmt.Sprintf("spec.ocx.registries[%s].url", alias), "is required")
+		}
+	}
+
+	names := make(map[string]bool)
+	for i, c := range o.Components {
+		field := fmt.Sprintf("spec.ocx.components[%d]", i)
+		if c.Name == "" {
+			r.addError(field+".name", "is required")
+		} else if names[c.Name] {
+			r.addError(field+".name", fmt.Sprintf("duplicate OCX component name %q", c.Name))
+		}
+		names[c.Name] = true
+		if c.Source == "" {
+			r.addError(field+".source", "is required")
+		}
 	}
 }
 

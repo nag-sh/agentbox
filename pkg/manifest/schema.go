@@ -87,6 +87,9 @@ type Spec struct {
 
 	// Runtime defines container runtime configuration.
 	Runtime RuntimeSpec `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+
+	// OCX defines OCX component sources and registry configuration.
+	OCX OCXSpec `yaml:"ocx,omitempty" json:"ocx,omitempty"`
 }
 
 // OSSpec defines the base operating system layer of the container image.
@@ -533,4 +536,37 @@ func (d Duration) MarshalYAML() (interface{}, error) {
 		return "", nil
 	}
 	return d.Duration.String(), nil
+}
+
+// OCXSpec declares OCX components to resolve and the registries used to
+// resolve them. Components may also be referenced directly from
+// SkillSpec.Source, PluginSpec.Source, or MCPServerSpec.Source using an
+// "ocx://" or full OCI reference scheme.
+type OCXSpec struct {
+	// Registries maps an alias to an OCX registry URL or OCI repository prefix.
+	Registries map[string]OCXRegistryRef `yaml:"registries,omitempty" json:"registries,omitempty"`
+
+	// Components lists OCX components to resolve and merge into the image.
+	Components []OCXComponentRef `yaml:"components,omitempty" json:"components,omitempty"`
+}
+
+// OCXComponentRef identifies an OCX component to resolve.
+type OCXComponentRef struct {
+	// Name is the component name.
+	Name string `yaml:"name" json:"name" validate:"required"`
+
+	// Source is an OCI reference or an alias-prefixed component reference.
+	Source string `yaml:"source" json:"source" validate:"required"`
+
+	// Version is the component version or tag. If empty, "latest" is used.
+	Version string `yaml:"version,omitempty" json:"version,omitempty"`
+}
+
+// OCXRegistryRef describes an OCX registry or OCI repository prefix.
+type OCXRegistryRef struct {
+	// URL is the registry base URL or OCI repository prefix.
+	URL string `yaml:"url" json:"url" validate:"required,url"`
+
+	// Headers are optional HTTP headers for HTTP registries.
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 }

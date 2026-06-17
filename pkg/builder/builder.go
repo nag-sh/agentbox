@@ -124,8 +124,22 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 		}
 	}
 
-	// 3. Resolve Skills/Plugins/MCP (stubbed for now)
-	
+	store := registry.NewArtifactStore(b.opts.Registry)
+
+	if b.opts.LogFn != nil {
+		b.opts.LogFn("Resolving skills, plugins, and MCP servers...")
+	}
+	artifactLayers, err := b.processArtifacts(ctx, store)
+	if err != nil {
+		return nil, fmt.Errorf("processing artifacts: %w", err)
+	}
+	if len(artifactLayers) > 0 {
+		baseImg, err = AppendLayers(baseImg, artifactLayers...)
+		if err != nil {
+			return nil, fmt.Errorf("appending artifact layers: %w", err)
+		}
+	}
+
 	// 4. Construct Agentbox specific layers
 	if b.opts.LogFn != nil {
 		b.opts.LogFn("Generating configuration files (runtime.yaml, guardrails.yaml)...")
@@ -221,4 +235,45 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 		Tag:    b.opts.Tag,
 		Client: b.opts.Registry,
 	}, nil
+}
+
+// processArtifacts resolves all skills, plugins, and MCP servers declared in the
+// manifest and returns their layers.
+func (b *Builder) processArtifacts(ctx context.Context, store *registry.ArtifactStore) ([]v1.Layer, error) {
+	var layers []v1.Layer
+
+	for _, skill := range b.opts.Manifest.Spec.Skills {
+		if b.opts.LogFn != nil {
+			b.opts.LogFn("Adding skill: %s", skill.Name)
+		}
+		layer, err := artifactLayer(ctx, store, skill, "/opt/agentbox/skills")
+		if err != nil {
+			return nil, fmt.Errorf("skill %q: %w", skill.Name, err)
+		}
+		layers = append(layers, layer)
+	}
+
+	for _, plugin := range b.opts.Manifest.Spec.Plugins {
+		if b.opts.LogFn != nil {
+			b.opts.LogFn("Adding plugin: %s", plugin.Name)
+		}
+		layer, err := pluginLayer(ctx, store, plugin, "/opt/agentbox/plugins")
+		if err != nil {
+			return nil, fmt.Errorf("plugin %q: %w", plugin.Name, err)
+		}
+		layers = append(layers, layer)
+	}
+
+	for _, srv := range b.opts.Manifest.Spec.MCP.Servers {
+		if b.opts.LogFn != nil {
+			b.opts.LogFn("Adding MCP server: %s", srv.Name)
+		}
+		layer, err := mcpLayer(ctx, store, srv, "/opt/agentbox/mcp")
+		if err != nil {
+			return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
+		}
+		layers = append(layers, layer)
+	}
+
+	return layers, nil
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/charmbracelet/log"
 	"gopkg.in/yaml.v3"
 
+	"github.com/nag-sh/agentbox/pkg/guardrails"
 	"github.com/nag-sh/agentbox/pkg/manifest"
 	"github.com/nag-sh/agentbox/pkg/network"
 )
@@ -180,6 +181,7 @@ type Init struct {
 	config     *RuntimeConfig
 	supervisor *Supervisor
 	logger     *log.Logger
+	guardrails *guardrails.Engine
 }
 
 // New creates a new Init instance with the given logger.
@@ -325,12 +327,26 @@ func parseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 func (init_ *Init) initGuardrails() error {
 	init_.logger.Debug("loading guardrail config", "path", guardrailConfigPath)
 
-	if _, err := os.Stat(guardrailConfigPath); os.IsNotExist(err) {
-		init_.logger.Info("no guardrail config found, skipping")
-		return nil
+	data, err := os.ReadFile(guardrailConfigPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			init_.logger.Info("no guardrail config found, skipping")
+			return nil
+		}
+		return fmt.Errorf("reading %s: %w", guardrailConfigPath, err)
 	}
 
-	// TODO: Initialize guardrail engine from config.
+	var grConfig guardrails.GuardrailConfig
+	if err := yaml.Unmarshal(data, &grConfig); err != nil {
+		return fmt.Errorf("parsing %s: %w", guardrailConfigPath, err)
+	}
+
+	engine := guardrails.NewEngine(grConfig)
+	if err := engine.ApplyResourceLimits(); err != nil {
+		return fmt.Errorf("applying resource limits: %w", err)
+	}
+
+	init_.guardrails = engine
 	init_.logger.Info("guardrail engine initialized")
 	return nil
 }

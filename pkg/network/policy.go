@@ -135,8 +135,7 @@ func (p *NetworkPolicy) GenerateIPTables() ([]string, error) {
 func (p *NetworkPolicy) RuntimeFlags() []string {
 	var flags []string
 
-	// If there are no egress rules and default is deny, use --network=none.
-	if p.Egress.DefaultPolicy == "deny" && len(p.Egress.Rules) == 0 {
+	if p.Egress.DefaultPolicy == "deny" && len(p.Egress.Rules) == 0 && len(p.Ingress.Rules) == 0 {
 		flags = append(flags, "--network=none")
 	}
 

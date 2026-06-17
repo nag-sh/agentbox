@@ -221,6 +221,26 @@ func extractTarGz(r io.Reader, dest string) error {
 			if err := file.Close(); err != nil {
 				return err
 			}
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			if err := os.Symlink(header.Linkname, target); err != nil {
+				return err
+			}
+		case tar.TypeLink:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			linkTarget := filepath.Join(dest, header.Linkname)
+			if !isWithinDest(linkTarget, dest) {
+				return fmt.Errorf("hard link target escapes destination: %s", header.Linkname)
+			}
+			if err := os.Link(linkTarget, target); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported tar entry type %d: %s", header.Typeflag, header.Name)
 		}
 	}
 	return nil

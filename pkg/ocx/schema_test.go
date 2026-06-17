@@ -87,7 +87,7 @@ func TestFileSpec_YAML(t *testing.T) {
 		want FileSpec
 	}{
 		{"shorthand", `- skills/x.md`, FileSpec{Path: "skills/x.md", Target: "skills/x.md"}},
-		{"explicit", `- path: src.md\n  target: dst.md`, FileSpec{Path: "src.md", Target: "dst.md"}},
+		{"explicit", `- {path: src.md, target: dst.md}`, FileSpec{Path: "src.md", Target: "dst.md"}},
 	}
 
 	for _, tc := range cases {

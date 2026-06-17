@@ -43,6 +43,10 @@ func NewOCIFetcher(client *registry.Client) *OCIFetcher {
 // temporary directory containing the component files. The caller is
 // responsible for removing the directory when done.
 func (f *OCIFetcher) Fetch(ctx context.Context, ref string) (*ComponentManifest, string, error) {
+	if f.client == nil {
+		return nil, "", fmt.Errorf("registry client is required")
+	}
+
 	parsedRef, err := name.ParseReference(ref)
 	if err != nil {
 		return nil, "", fmt.Errorf("parsing reference %q: %w", ref, err)
@@ -101,7 +105,7 @@ func (f *OCIFetcher) repository(ctx context.Context, ref name.Reference) (*remot
 		return nil, fmt.Errorf("creating repository: %w", err)
 	}
 
-	keychain := &registry.ContainerRegistryAuthWrapper{Auth: f.client.AuthenticatorWrapper()}
+	keychain := f.client.AuthenticatorWrapper()
 	repo.Client = &auth.Client{
 		Client: retry.DefaultClient,
 		Cache:  auth.NewCache(),

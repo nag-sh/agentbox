@@ -234,6 +234,14 @@ func validatePlugins(plugins []PluginSpec, r *ValidationResult) {
 }
 
 func validateGuardrails(g *GuardrailsSpec, r *ValidationResult) {
+	validPolicies := map[string]bool{"": true, "allow": true, "deny": true}
+	if !validPolicies[g.Commands.DefaultPolicy] {
+		r.addError("spec.guardrails.commands.defaultPolicy", fmt.Sprintf("must be 'allow' or 'deny', got %q", g.Commands.DefaultPolicy))
+	}
+	if !validPolicies[g.Filesystem.DefaultPolicy] {
+		r.addError("spec.guardrails.filesystem.defaultPolicy", fmt.Sprintf("must be 'allow' or 'deny', got %q", g.Filesystem.DefaultPolicy))
+	}
+
 	// Validate resource limits if specified.
 	if g.Resources.MaxMemory != "" {
 		if !isValidMemorySize(g.Resources.MaxMemory) {

@@ -225,16 +225,16 @@ type HealthCheckSpec struct {
 	Command string `yaml:"command,omitempty" json:"command,omitempty"`
 
 	// Interval is the time between health checks.
-	Interval time.Duration `yaml:"interval,omitempty" json:"interval,omitempty"`
+	Interval Duration `yaml:"interval,omitempty" json:"interval,omitempty"`
 
 	// Timeout is the maximum time to wait for a health check response.
-	Timeout time.Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Timeout Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 
 	// Retries is the number of consecutive failures before marking unhealthy.
 	Retries int `yaml:"retries,omitempty" json:"retries,omitempty"`
 
 	// StartPeriod is the grace period after startup before health checks begin.
-	StartPeriod time.Duration `yaml:"startPeriod,omitempty" json:"startPeriod,omitempty"`
+	StartPeriod Duration `yaml:"startPeriod,omitempty" json:"startPeriod,omitempty"`
 }
 
 // PluginSpec defines a harness plugin to bundle into the image.
@@ -313,6 +313,10 @@ type CommandGuardrails struct {
 	// Deny rules take precedence over allow rules.
 	Deny []string `yaml:"deny,omitempty" json:"deny,omitempty"`
 
+	// DefaultPolicy is the policy applied when no rule matches ("allow" or "deny").
+	// Defaults to "deny".
+	DefaultPolicy string `yaml:"defaultPolicy,omitempty" json:"defaultPolicy,omitempty" validate:"omitempty,oneof=allow deny"`
+
 	// MaxExecutionTime is the maximum time a single command may run.
 	MaxExecutionTime Duration `yaml:"maxExecutionTime,omitempty" json:"maxExecutionTime,omitempty"`
 }
@@ -328,6 +332,9 @@ type FilesystemGuardrails struct {
 
 	// Deny is a list of paths that are always denied, regardless of other rules.
 	Deny []string `yaml:"deny,omitempty" json:"deny,omitempty"`
+
+	// DefaultPolicy is the policy applied when no rule matches ("allow" or "deny").
+	DefaultPolicy string `yaml:"defaultPolicy,omitempty" json:"defaultPolicy,omitempty" validate:"omitempty,oneof=allow deny"`
 }
 
 // ResourceGuardrails defines container resource limits.

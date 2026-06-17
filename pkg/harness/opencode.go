@@ -47,11 +47,6 @@ func (a *OpenCodeAdapter) GenerateConfig(cfg *HarnessConfig) (map[string][]byte,
 	config["model"] = modelRef
 
 	if cfg.Model.APIKeyEnv != "" {
-		providerKey := provider
-		if providerKey == "anthropic" {
-			providerKey = "anthropic"
-		}
-
 		providerMap := map[string]interface{}{
 			"options": map[string]interface{}{
 				"apiKey": fmt.Sprintf("{env:%s}", cfg.Model.APIKeyEnv),
@@ -62,7 +57,7 @@ func (a *OpenCodeAdapter) GenerateConfig(cfg *HarnessConfig) (map[string][]byte,
 		}
 
 		config["provider"] = map[string]interface{}{
-			providerKey: providerMap,
+			provider: providerMap,
 		}
 	}
 

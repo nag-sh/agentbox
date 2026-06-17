@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -213,6 +214,10 @@ be passed through from the host.`,
 					MemoryBytes: memBytes,
 					PidsLimit:   int64(gr.Resources.Pids),
 				}
+			} else {
+				if info, err := rt.Inspect(cmd.Context(), imageRef); err == nil && info.Labels != nil {
+					applyRuntimePolicyFromLabel(&opts, info.Labels[runtime.PolicyLabel])
+				}
 			}
 
 			// Add env files as extra args to the runtime
@@ -240,6 +245,22 @@ be passed through from the host.`,
 	cmd.Flags().StringVar(&name, "name", "", "Container name")
 
 	return cmd
+}
+
+func applyRuntimePolicyFromLabel(opts *runtime.RunOptions, label string) {
+	if label == "" {
+		return
+	}
+	var policy runtime.Policy
+	if err := json.Unmarshal([]byte(label), &policy); err != nil {
+		return
+	}
+	opts.NetworkFlags = policy.NetworkFlags
+	opts.ResourceLimits = &runtime.ResourceLimits{
+		CPUs:        policy.CPUs,
+		MemoryBytes: policy.MemoryBytes,
+		PidsLimit:   policy.PidsLimit,
+	}
 }
 
 // parseEnvVar splits a KEY=VALUE string. If no = is present, the value

@@ -2,6 +2,7 @@ package builder
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -11,10 +12,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
+	"github.com/nag-sh/agentbox/pkg/guardrails"
 	"github.com/nag-sh/agentbox/pkg/harness"
 	"github.com/nag-sh/agentbox/pkg/manifest"
+	"github.com/nag-sh/agentbox/pkg/network"
 	"github.com/nag-sh/agentbox/pkg/ocx"
 	"github.com/nag-sh/agentbox/pkg/registry"
+	"github.com/nag-sh/agentbox/pkg/runtime"
 )
 
 // Options configure the image builder.
@@ -234,7 +238,10 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 	for k, v := range b.opts.Manifest.Metadata.Labels {
 		cfg.Config.Labels[k] = v
 	}
-	
+	if policyJSON, err := json.Marshal(runtimePolicyFromManifest(b.opts.Manifest)); err == nil {
+		cfg.Config.Labels[runtime.PolicyLabel] = string(policyJSON)
+	}
+
 	img, err = mutate.Config(img, cfg.Config)
 	if err != nil {
 		return nil, fmt.Errorf("mutating image config: %w", err)
@@ -284,26 +291,26 @@ func (b *Builder) resolveOCXComponents(ctx context.Context) (*ocx.ResolvedSet, e
 	return resolved, nil
 }
 
-// resolveOCXSource converts an OCXComponentRef into a full OCI reference. If
-// the source already contains a registry host it is returned unchanged;
-// otherwise the matching registry alias from spec.ocx.registries is prepended.
 func (b *Builder) resolveOCXSource(ref manifest.OCXComponentRef) string {
-	if strings.Contains(ref.Source, ".") || strings.Contains(ref.Source, "/") && strings.Contains(ref.Source, ":") {
-		return ref.Source
-	}
 	alias, rest, found := strings.Cut(ref.Source, "/")
-	if !found {
-		return ref.Source
+	if found {
+		if reg, ok := b.opts.Manifest.Spec.OCX.Registries[alias]; ok {
+			base := strings.TrimSuffix(reg.URL, "/") + "/" + rest
+			if strings.Contains(base, ":") {
+				return base
+			}
+			version := ref.Version
+			if version == "" {
+				version = "latest"
+			}
+			return fmt.Sprintf("%s:%s", base, version)
+		}
 	}
-	reg, ok := b.opts.Manifest.Spec.OCX.Registries[alias]
-	if !ok {
-		return ref.Source
+
+	if ref.Version != "" && !strings.Contains(ref.Source, ":") {
+		return fmt.Sprintf("%s:%s", ref.Source, ref.Version)
 	}
-	version := ref.Version
-	if version == "" {
-		version = "latest"
-	}
-	return fmt.Sprintf("%s/%s:%s", strings.TrimSuffix(reg.URL, "/"), rest, version)
+	return ref.Source
 }
 
 func (b *Builder) processOCXLayers(resolved *ocx.ResolvedSet) ([]v1.Layer, error) {
@@ -387,4 +394,17 @@ func (b *Builder) processArtifacts(ctx context.Context, store *registry.Artifact
 	}
 
 	return layers, nil
+}
+
+func runtimePolicyFromManifest(m *manifest.Manifest) runtime.Policy {
+	netPolicy := network.FromManifest(m.Spec.Network)
+	gr := guardrails.FromManifest(m.Spec.Guardrails)
+
+	memBytes, _ := guardrails.ParseSize(gr.Resources.Memory)
+	return runtime.Policy{
+		NetworkFlags: netPolicy.RuntimeFlags(),
+		CPUs:         gr.Resources.CPU,
+		MemoryBytes:  memBytes,
+		PidsLimit:    int64(gr.Resources.Pids),
+	}
 }

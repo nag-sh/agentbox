@@ -11,9 +11,10 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
-	"github.com/nag-sh/agentbox/pkg/manifest"
-	"github.com/nag-sh/agentbox/pkg/registry"
 	"github.com/nag-sh/agentbox/pkg/harness"
+	"github.com/nag-sh/agentbox/pkg/manifest"
+	"github.com/nag-sh/agentbox/pkg/ocx"
+	"github.com/nag-sh/agentbox/pkg/registry"
 )
 
 // Options configure the image builder.
@@ -124,6 +125,14 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 		}
 	}
 
+	resolved, err := b.resolveOCXComponents(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolving OCX components: %w", err)
+	}
+	if resolved != nil {
+		defer resolved.Cleanup()
+	}
+
 	store := registry.NewArtifactStore(b.opts.Registry)
 
 	if b.opts.LogFn != nil {
@@ -140,6 +149,17 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 		}
 	}
 
+	ocxLayers, err := b.processOCXLayers(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("processing OCX layers: %w", err)
+	}
+	if len(ocxLayers) > 0 {
+		baseImg, err = AppendLayers(baseImg, ocxLayers...)
+		if err != nil {
+			return nil, fmt.Errorf("appending OCX layers: %w", err)
+		}
+	}
+
 	// 4. Construct Agentbox specific layers
 	if b.opts.LogFn != nil {
 		b.opts.LogFn("Generating configuration files (runtime.yaml, guardrails.yaml)...")
@@ -153,7 +173,7 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 	configGen.RegisterAdapter(string(manifest.HarnessOpenCode), &harness.OpenCodeAdapter{})
 	configGen.RegisterAdapter(string(manifest.HarnessGoose), &harness.GooseAdapter{})
 	
-	generatedFiles, err := configGen.Generate(b.opts.Manifest)
+	generatedFiles, err := configGen.Generate(b.opts.Manifest, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("generating configuration: %w", err)
 	}
@@ -235,6 +255,97 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 		Tag:    b.opts.Tag,
 		Client: b.opts.Registry,
 	}, nil
+}
+
+// resolveOCXComponents fetches and resolves any OCX components declared in the
+// manifest. It returns nil when no components are declared.
+func (b *Builder) resolveOCXComponents(ctx context.Context) (*ocx.ResolvedSet, error) {
+	refs := b.opts.Manifest.Spec.OCX.Components
+	if len(refs) == 0 {
+		return nil, nil
+	}
+
+	sources := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		sources = append(sources, b.resolveOCXSource(ref))
+	}
+
+	fetcher := ocx.NewOCIFetcher(b.opts.Registry)
+	resolver := ocx.NewResolver(fetcher)
+
+	if b.opts.LogFn != nil {
+		b.opts.LogFn("Resolving OCX components: %v", sources)
+	}
+	resolved, err := resolver.Resolve(ctx, sources)
+	if err != nil {
+		return nil, err
+	}
+
+	return resolved, nil
+}
+
+// resolveOCXSource converts an OCXComponentRef into a full OCI reference. If
+// the source already contains a registry host it is returned unchanged;
+// otherwise the matching registry alias from spec.ocx.registries is prepended.
+func (b *Builder) resolveOCXSource(ref manifest.OCXComponentRef) string {
+	if strings.Contains(ref.Source, ".") || strings.Contains(ref.Source, "/") && strings.Contains(ref.Source, ":") {
+		return ref.Source
+	}
+	alias, rest, found := strings.Cut(ref.Source, "/")
+	if !found {
+		return ref.Source
+	}
+	reg, ok := b.opts.Manifest.Spec.OCX.Registries[alias]
+	if !ok {
+		return ref.Source
+	}
+	version := ref.Version
+	if version == "" {
+		version = "latest"
+	}
+	return fmt.Sprintf("%s/%s:%s", strings.TrimSuffix(reg.URL, "/"), rest, version)
+}
+
+func (b *Builder) processOCXLayers(resolved *ocx.ResolvedSet) ([]v1.Layer, error) {
+	if resolved == nil {
+		return nil, nil
+	}
+
+	var layers []v1.Layer
+	for _, c := range resolved.Components {
+		root := ocxComponentRoot(c.Manifest.Type)
+		if root == "" {
+			continue
+		}
+		target := fmt.Sprintf("%s/%s", root, c.Manifest.Name)
+		if b.opts.LogFn != nil {
+			b.opts.LogFn("Adding OCX %s: %s", c.Manifest.Type, c.Manifest.Name)
+		}
+		layer, err := CreateLayerFromDir(c.StagingDir, target)
+		if err != nil {
+			return nil, fmt.Errorf("layer for OCX component %q: %w", c.Manifest.Name, err)
+		}
+		layers = append(layers, layer)
+	}
+	return layers, nil
+}
+
+func ocxComponentRoot(t ocx.ComponentType) string {
+	switch t {
+	case ocx.ComponentSkill:
+		return "/opt/agentbox/skills"
+	case ocx.ComponentPlugin:
+		return "/opt/agentbox/plugins"
+	case ocx.ComponentAgent:
+		return "/opt/agentbox/agents"
+	case ocx.ComponentCommand:
+		return "/opt/agentbox/commands"
+	case ocx.ComponentTool:
+		return "/opt/agentbox/tools"
+	case ocx.ComponentBundle, ocx.ComponentProfile:
+		return ""
+	}
+	return ""
 }
 
 // processArtifacts resolves all skills, plugins, and MCP servers declared in the

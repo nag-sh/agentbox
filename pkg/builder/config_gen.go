@@ -8,35 +8,37 @@ import (
 	"github.com/charmbracelet/log"
 	"gopkg.in/yaml.v3"
 
-	"github.com/nag-sh/agentbox/pkg/guardrails"
 	"github.com/nag-sh/agentbox/pkg/harness"
 	agentboxinit "github.com/nag-sh/agentbox/pkg/init"
 	"github.com/nag-sh/agentbox/pkg/manifest"
-	"github.com/nag-sh/agentbox/pkg/network"
+	"github.com/nag-sh/agentbox/pkg/ocx"
 )
 
 // ConfigGenerator orchestrates configuration file generation by delegating
-// to the appropriate HarnessAdapter based on the manifest.
+// to the appropriate harness adapter based on a normalized HarnessConfig.
 type ConfigGenerator struct {
-	adapters map[string]harness.Adapter
-	logger   *log.Logger
+	adapters   map[string]harness.Adapter
+	normalizer *ocx.Normalizer
+	logger     *log.Logger
 }
 
 // NewConfigGenerator creates a new ConfigGenerator.
 func NewConfigGenerator() *ConfigGenerator {
 	return &ConfigGenerator{
-		adapters: make(map[string]harness.Adapter),
-		logger:   log.Default(),
+		adapters:   make(map[string]harness.Adapter),
+		normalizer: ocx.NewNormalizer(),
+		logger:     log.Default(),
 	}
 }
 
-// RegisterAdapter registers a HarnessAdapter.
+// RegisterAdapter registers a harness adapter.
 func (g *ConfigGenerator) RegisterAdapter(name string, adapter harness.Adapter) {
 	g.adapters[name] = adapter
 }
 
-// Generate produces all configuration files for the harness.
-func (g *ConfigGenerator) Generate(m *manifest.Manifest) (map[string][]byte, error) {
+// Generate produces all configuration files for the harness. If resolved is
+// non-nil, the OCX components are merged into the normalized HarnessConfig.
+func (g *ConfigGenerator) Generate(m *manifest.Manifest, resolved *ocx.ResolvedSet) (map[string][]byte, error) {
 	if m == nil {
 		return nil, fmt.Errorf("manifest must not be nil")
 	}
@@ -51,17 +53,21 @@ func (g *ConfigGenerator) Generate(m *manifest.Manifest) (map[string][]byte, err
 		return nil, fmt.Errorf("no adapter registered for harness %q", harnessName)
 	}
 
-	if err := adapter.ValidateManifest(m); err != nil {
-		return nil, fmt.Errorf("manifest validation failed for harness %q: %w", harnessName, err)
+	cfg, err := g.normalizer.Normalize(m, resolved)
+	if err != nil {
+		return nil, fmt.Errorf("normalizing harness config: %w", err)
 	}
 
-	configs, err := adapter.GenerateConfig(m)
+	if err := adapter.ValidateConfig(cfg); err != nil {
+		return nil, fmt.Errorf("harness config validation failed for %q: %w", harnessName, err)
+	}
+
+	configs, err := adapter.GenerateConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("generating config for harness %q: %w", harnessName, err)
 	}
 
-	// Merge with common agentbox configuration.
-	allConfigs, err := g.generateCommonConfig(m, adapter)
+	allConfigs, err := g.generateCommonConfig(cfg, adapter)
 	if err != nil {
 		return nil, err
 	}
@@ -73,28 +79,27 @@ func (g *ConfigGenerator) Generate(m *manifest.Manifest) (map[string][]byte, err
 }
 
 // generateCommonConfig produces configuration files common to all harnesses.
-func (g *ConfigGenerator) generateCommonConfig(m *manifest.Manifest, adapter harness.Adapter) (map[string][]byte, error) {
+func (g *ConfigGenerator) generateCommonConfig(cfg *harness.HarnessConfig, adapter harness.Adapter) (map[string][]byte, error) {
 	configs := make(map[string][]byte)
 
-	// Save the full original manifest inside the container for reference.
-	if manifestData, err := json.MarshalIndent(m, "", "  "); err == nil {
-		configs["/opt/agentbox/config/agentbox.json"] = manifestData
+	// Save the full normalized config inside the container for reference.
+	if data, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+		configs["/opt/agentbox/config/agentbox.json"] = data
 	}
 
 	// Guardrail configuration in the format the init engine expects.
-	guardConfig := guardrails.FromManifest(m.Spec.Guardrails)
+	guardConfig := cfg.Guardrails
 	if guardrailsData, err := yaml.Marshal(&guardConfig); err == nil {
 		configs["/opt/agentbox/config/guardrails.yaml"] = guardrailsData
 	}
 
 	// Network policy configuration for the init engine.
-	netPolicy := network.FromManifest(m.Spec.Network)
-	if networkData, err := yaml.Marshal(&netPolicy); err == nil {
+	if networkData, err := yaml.Marshal(&cfg.Network); err == nil {
 		configs["/opt/agentbox/config/network.yaml"] = networkData
 	}
 
-	// Runtime configuration consumed by agentbox-agentboxinit.
-	runtimeConfig, err := runtimeConfigFromManifest(m, adapter)
+	// Runtime configuration consumed by agentbox-init.
+	runtimeConfig, err := runtimeConfigFromHarnessConfig(cfg, adapter)
 	if err != nil {
 		return nil, fmt.Errorf("generating runtime config: %w", err)
 	}
@@ -105,49 +110,50 @@ func (g *ConfigGenerator) generateCommonConfig(m *manifest.Manifest, adapter har
 	return configs, nil
 }
 
-// runtimeConfigFromManifest builds the init RuntimeConfig from the manifest.
-func runtimeConfigFromManifest(m *manifest.Manifest, adapter harness.Adapter) (agentboxinit.RuntimeConfig, error) {
+// runtimeConfigFromHarnessConfig builds the init RuntimeConfig from the
+// normalized harness config.
+func runtimeConfigFromHarnessConfig(cfg *harness.HarnessConfig, adapter harness.Adapter) (agentboxinit.RuntimeConfig, error) {
 	entrypoint := adapter.DefaultEntrypoint()
 	if len(entrypoint) == 0 {
 		return agentboxinit.RuntimeConfig{}, fmt.Errorf("harness adapter %q returned empty entrypoint", adapter.Name())
 	}
 
 	harnessEnv := make(map[string]string)
-	for k, v := range m.Spec.Runtime.Env {
+	for k, v := range cfg.Runtime.Env {
 		harnessEnv[k] = v
 	}
 
 	requiredEnv := []string{}
-	if m.Spec.Model.APIKeyEnv != "" {
-		requiredEnv = append(requiredEnv, m.Spec.Model.APIKeyEnv)
+	if cfg.Model.APIKeyEnv != "" {
+		requiredEnv = append(requiredEnv, cfg.Model.APIKeyEnv)
 	}
 
-	mcpServers := make([]agentboxinit.MCPServerConfig, 0, len(m.Spec.MCP.Servers))
-	for _, srv := range m.Spec.MCP.Servers {
-		cfg := agentboxinit.MCPServerConfig{
+	mcpServers := make([]agentboxinit.MCPServerConfig, 0, len(cfg.MCPs))
+	for _, srv := range cfg.MCPs {
+		c := agentboxinit.MCPServerConfig{
 			Name:        srv.Name,
 			Env:         srv.Env,
 			MaxRestarts: 3,
 		}
 		if srv.Command != "" {
-			cfg.Command = srv.Command
-			cfg.Args = srv.Args
+			c.Command = srv.Command
+			c.Args = srv.Args
 		} else {
-			cfg.Command = fmt.Sprintf("/opt/agentbox/mcp/%s/run.sh", srv.Name)
+			c.Command = fmt.Sprintf("/opt/agentbox/mcp/%s/run.sh", srv.Name)
 		}
 		if srv.HealthCheck != nil {
-			cfg.HealthCheck = &agentboxinit.HealthCheckConfig{
+			c.HealthCheck = &agentboxinit.HealthCheckConfig{
 				Command:  strings.Fields(srv.HealthCheck.Command),
-				Interval: manifest.Duration{Duration: srv.HealthCheck.Interval.Duration},
-				Timeout:  manifest.Duration{Duration: srv.HealthCheck.Timeout.Duration},
+				Interval: manifest.Duration{Duration: srv.HealthCheck.Interval},
+				Timeout:  manifest.Duration{Duration: srv.HealthCheck.Timeout},
 				Retries:  srv.HealthCheck.Retries,
 			}
 		}
-		mcpServers = append(mcpServers, cfg)
+		mcpServers = append(mcpServers, c)
 	}
 
-	secrets := make([]agentboxinit.SecretConfig, 0, len(m.Spec.Secrets.Files))
-	for _, f := range m.Spec.Secrets.Files {
+	secrets := make([]agentboxinit.SecretConfig, 0, len(cfg.Secrets.Files))
+	for _, f := range cfg.Secrets.Files {
 		secrets = append(secrets, agentboxinit.SecretConfig{
 			Path:   f.Target,
 			EnvVar: f.Env,
@@ -159,7 +165,7 @@ func runtimeConfigFromManifest(m *manifest.Manifest, adapter harness.Adapter) (a
 			Command: entrypoint[0],
 			Args:    entrypoint[1:],
 			Env:     harnessEnv,
-			Workdir: m.Spec.Runtime.Workdir,
+			Workdir: cfg.Runtime.Workdir,
 		},
 		MCPServers:  mcpServers,
 		RequiredEnv: requiredEnv,

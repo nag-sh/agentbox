@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/log"
 	"gopkg.in/yaml.v3"
@@ -143,7 +144,7 @@ func runtimeConfigFromHarnessConfig(cfg *harness.HarnessConfig, adapter harness.
 		}
 		if srv.HealthCheck != nil {
 			c.HealthCheck = &agentboxinit.HealthCheckConfig{
-				Command:  strings.Fields(srv.HealthCheck.Command),
+				Command:  splitShellCommand(srv.HealthCheck.Command),
 				Interval: manifest.Duration{Duration: srv.HealthCheck.Interval},
 				Timeout:  manifest.Duration{Duration: srv.HealthCheck.Timeout},
 				Retries:  srv.HealthCheck.Retries,
@@ -171,4 +172,49 @@ func runtimeConfigFromHarnessConfig(cfg *harness.HarnessConfig, adapter harness.
 		RequiredEnv: requiredEnv,
 		Secrets:     secrets,
 	}, nil
+}
+
+func splitShellCommand(s string) []string {
+	var args []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+
+	flush := func() {
+		if current.Len() > 0 {
+			args = append(args, current.String())
+			current.Reset()
+		}
+	}
+
+	for _, r := range s {
+		if escaped {
+			current.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			} else {
+				current.WriteRune(r)
+			}
+			continue
+		}
+		if r == '"' || r == '\'' {
+			quote = r
+			continue
+		}
+		if unicode.IsSpace(r) {
+			flush()
+			continue
+		}
+		current.WriteRune(r)
+	}
+	flush()
+	return args
 }

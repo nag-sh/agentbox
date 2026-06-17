@@ -108,6 +108,30 @@ func TestConfigGenerator_Generate_WithOCX(t *testing.T) {
 	}
 }
 
+func TestSplitShellCommand(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"/bin/sh -c echo hello", []string{"/bin/sh", "-c", "echo", "hello"}},
+		{"/bin/sh -c 'echo hello'", []string{"/bin/sh", "-c", "echo hello"}},
+		{"/bin/sh -c \"echo hello\"", []string{"/bin/sh", "-c", "echo hello"}},
+		{"cmd 'a b' c", []string{"cmd", "a b", "c"}},
+	}
+	for _, tc := range cases {
+		got := splitShellCommand(tc.in)
+		if len(got) != len(tc.want) {
+			t.Errorf("%q: got %v, want %v", tc.in, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%q: arg %d got %q want %q", tc.in, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
 func TestConfigGenerator_Generate_UnknownHarness(t *testing.T) {
 	m := &manifest.Manifest{
 		APIVersion: "agentbox/v1",

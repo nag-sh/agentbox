@@ -18,24 +18,23 @@ spec:
   # Default model used when the harness starts. Additional providers are
   # configured in the opencode passthrough block below.
   model:
-    provider: google
-    name: gemini-2.5-pro
-    apiKeyEnv: GOOGLE_API_KEY
+    provider: custom
+    name: Big Pickle
 
   # OpenCode-specific passthrough config. This is deep-merged into the
   # generated opencode.json, so it can set fields not otherwise exposed by
   # the agentbox schema (multiple providers, plugins, permissions, etc.).
   opencode:
-    model: google/gemini-2.5-pro
+    model: opencode-zen/Big Pickle
     default_agent: default
 
     provider:
+      opencode-zen:
+        options:
+          apiKey: "{env:OPENCODE_API_KEY}"
       google:
         options:
           apiKey: "{env:GOOGLE_API_KEY}"
-      opencode:
-        options:
-          apiKey: "{env:OPENCODE_API_KEY}"
       kimi:
         options:
           apiKey: "{env:MOONSHOT_API_KEY}"

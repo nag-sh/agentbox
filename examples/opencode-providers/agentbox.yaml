@@ -1,0 +1,109 @@
+apiVersion: agentbox/v1
+kind: AgentImage
+metadata:
+  name: opencode-all-providers
+  version: 1.0.0
+  description: >
+    OpenCode harness configured for multiple providers (Google Gemini,
+    OpenCode Go/Zen, Kimi), plugins, and MCP servers. The current working
+    directory is mounted as /workspace at runtime.
+spec:
+  os:
+    base: ghcr.io/nag-sh/agentos/base:latest
+
+  harness:
+    name: opencode
+    version: latest
+
+  # Default model used when the harness starts. Additional providers are
+  # configured in the opencode passthrough block below.
+  model:
+    provider: google
+    name: gemini-2.5-pro
+    apiKeyEnv: GOOGLE_API_KEY
+
+  # OpenCode-specific passthrough config. This is deep-merged into the
+  # generated opencode.json, so it can set fields not otherwise exposed by
+  # the agentbox schema (multiple providers, plugins, permissions, etc.).
+  opencode:
+    model: google/gemini-2.5-pro
+    default_agent: default
+
+    provider:
+      google:
+        options:
+          apiKey: "{env:GOOGLE_API_KEY}"
+      opencode:
+        options:
+          apiKey: "{env:OPENCODE_API_KEY}"
+      kimi:
+        options:
+          apiKey: "{env:MOONSHOT_API_KEY}"
+
+    plugin:
+      - oh-my-openagent
+      - openquota
+
+    permission:
+      bash:
+        "*": deny
+        "git *": allow
+        "npm *": allow
+        "npx *": allow
+        "go *": allow
+      write: deny
+
+  # MCP servers shipped with the image. Each is started via npx so the
+  # harness can reach it over stdio. Make sure the corresponding API keys
+  # are passed through with --secret-env or --env at runtime.
+  mcp:
+    servers:
+      - name: mermaid
+        command: npx
+        args: ["-y", "@modelcontextprotocol/server-mermaid"]
+        transport: stdio
+      - name: context7
+        command: npx
+        args: ["-y", "@opencode/context7-mcp"]
+        transport: stdio
+      - name: grep_app
+        command: npx
+        args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+        transport: stdio
+      - name: lsp
+        command: npx
+        args: ["-y", "@modelcontextprotocol/server-lsp"]
+        transport: stdio
+      - name: websearch
+        command: npx
+        args: ["-y", "@modelcontextprotocol/server-brave-search"]
+        transport: stdio
+      - name: websearch_cited
+        command: npx
+        args: ["-y", "@modelcontextprotocol/server-exa"]
+        transport: stdio
+      - name: ast_grep
+        command: npx
+        args: ["-y", "@modelcontextprotocol/server-ast-grep"]
+        transport: stdio
+
+  # Network defaults: deny outbound unless explicitly allowed.
+  network:
+    egress:
+      defaultPolicy: deny
+      allow:
+        - host: "*.googleapis.com"
+        - host: "api.moonshot.cn"
+        - host: "api.opencode.ai"
+        - host: "registry.npmjs.org"
+    ingress:
+      defaultPolicy: deny
+
+  # Mount the manifest directory (typically the project root / cwd) as the
+  # workspace inside the container.
+  runtime:
+    workdir: /workspace
+    mounts:
+      - type: bind
+        source: "."
+        target: /workspace

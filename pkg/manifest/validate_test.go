@@ -62,6 +62,25 @@ func TestValidate_invalidMemory(t *testing.T) {
 	}
 }
 
+func TestExampleManifests(t *testing.T) {
+	examples := []string{
+		"../../examples/opencode-kimi/agentbox.yaml",
+		"../../examples/opencode-providers/agentbox.yaml",
+	}
+	for _, path := range examples {
+		t.Run(path, func(t *testing.T) {
+			m, err := LoadFile(path)
+			if err != nil {
+				t.Fatalf("LoadFile %s: %v", path, err)
+			}
+			result := Validate(m)
+			if !result.IsValid() {
+				t.Fatalf("Validate %s: %s", path, result.Error())
+			}
+		})
+	}
+}
+
 func TestValidate_duplicateSkillName(t *testing.T) {
 	m := newValidManifest()
 	m.Spec.Skills = []SkillSpec{

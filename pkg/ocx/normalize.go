@@ -162,6 +162,10 @@ func (n *Normalizer) Normalize(m *manifest.Manifest, resolved *ResolvedSet) (*ha
 		})
 	}
 
+	if len(m.Spec.Opencode) > 0 {
+		h.Opencode = mergeOpencode(h.Opencode, OpencodeBlock(m.Spec.Opencode))
+	}
+
 	if resolved != nil {
 		if err := n.applyResolved(h, resolved); err != nil {
 			return nil, err

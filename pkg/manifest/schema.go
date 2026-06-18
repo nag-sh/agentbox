@@ -90,7 +90,18 @@ type Spec struct {
 
 	// OCX defines OCX component sources and registry configuration.
 	OCX OCXSpec `yaml:"ocx,omitempty" json:"ocx,omitempty"`
+
+	// Opencode is an optional passthrough block that is deep-merged into the
+	// generated opencode.json harness config. It allows manifest authors to set
+	// OpenCode-specific fields (multiple providers, plugins, permissions, etc.)
+	// that are not otherwise exposed by the agentbox schema.
+	Opencode OpencodeBlock `yaml:"opencode,omitempty" json:"opencode,omitempty"`
 }
+
+// OpencodeBlock is a free-form map used for OpenCode-specific passthrough
+// configuration. It is intentionally untyped so that the OpenCode config can
+// evolve without requiring agentbox schema changes.
+type OpencodeBlock map[string]interface{}
 
 // OSSpec defines the base operating system layer of the container image.
 type OSSpec struct {
@@ -141,13 +152,15 @@ const (
 	ModelProviderAnthropic ModelProvider = "anthropic"
 	ModelProviderOpenAI    ModelProvider = "openai"
 	ModelProviderOllama    ModelProvider = "ollama"
+	ModelProviderGoogle    ModelProvider = "google"
+	ModelProviderKimi      ModelProvider = "kimi"
 	ModelProviderCustom    ModelProvider = "custom"
 )
 
 // ModelSpec defines the LLM model configuration.
 type ModelSpec struct {
 	// Provider identifies the LLM provider (e.g., "anthropic", "openai").
-	Provider ModelProvider `yaml:"provider" json:"provider" validate:"required,oneof=anthropic openai ollama custom"`
+	Provider ModelProvider `yaml:"provider" json:"provider" validate:"required,oneof=anthropic openai ollama google kimi custom"`
 
 	// Name is the model identifier (e.g., "claude-sonnet-4-20250514").
 	Name string `yaml:"name" json:"name" validate:"required"`

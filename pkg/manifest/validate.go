@@ -139,6 +139,8 @@ var validProviders = map[ModelProvider]bool{
 	ModelProviderAnthropic: true,
 	ModelProviderOpenAI:    true,
 	ModelProviderOllama:    true,
+	ModelProviderGoogle:    true,
+	ModelProviderKimi:      true,
 	ModelProviderCustom:    true,
 }
 

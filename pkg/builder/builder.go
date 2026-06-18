@@ -2,6 +2,7 @@ package builder
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -11,9 +12,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
-	"github.com/nag-sh/agentbox/pkg/manifest"
-	"github.com/nag-sh/agentbox/pkg/registry"
+	"github.com/nag-sh/agentbox/pkg/guardrails"
 	"github.com/nag-sh/agentbox/pkg/harness"
+	"github.com/nag-sh/agentbox/pkg/manifest"
+	"github.com/nag-sh/agentbox/pkg/network"
+	"github.com/nag-sh/agentbox/pkg/ocx"
+	"github.com/nag-sh/agentbox/pkg/registry"
+	"github.com/nag-sh/agentbox/pkg/runtime"
 )
 
 // Options configure the image builder.
@@ -124,8 +129,41 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 		}
 	}
 
-	// 3. Resolve Skills/Plugins/MCP (stubbed for now)
-	
+	resolved, err := b.resolveOCXComponents(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolving OCX components: %w", err)
+	}
+	if resolved != nil {
+		defer resolved.Cleanup()
+	}
+
+	store := registry.NewArtifactStore(b.opts.Registry)
+
+	if b.opts.LogFn != nil {
+		b.opts.LogFn("Resolving skills, plugins, and MCP servers...")
+	}
+	artifactLayers, err := b.processArtifacts(ctx, store)
+	if err != nil {
+		return nil, fmt.Errorf("processing artifacts: %w", err)
+	}
+	if len(artifactLayers) > 0 {
+		baseImg, err = AppendLayers(baseImg, artifactLayers...)
+		if err != nil {
+			return nil, fmt.Errorf("appending artifact layers: %w", err)
+		}
+	}
+
+	ocxLayers, err := b.processOCXLayers(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("processing OCX layers: %w", err)
+	}
+	if len(ocxLayers) > 0 {
+		baseImg, err = AppendLayers(baseImg, ocxLayers...)
+		if err != nil {
+			return nil, fmt.Errorf("appending OCX layers: %w", err)
+		}
+	}
+
 	// 4. Construct Agentbox specific layers
 	if b.opts.LogFn != nil {
 		b.opts.LogFn("Generating configuration files (runtime.yaml, guardrails.yaml)...")
@@ -139,7 +177,7 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 	configGen.RegisterAdapter(string(manifest.HarnessOpenCode), &harness.OpenCodeAdapter{})
 	configGen.RegisterAdapter(string(manifest.HarnessGoose), &harness.GooseAdapter{})
 	
-	generatedFiles, err := configGen.Generate(b.opts.Manifest)
+	generatedFiles, err := configGen.Generate(b.opts.Manifest, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("generating configuration: %w", err)
 	}
@@ -200,7 +238,10 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 	for k, v := range b.opts.Manifest.Metadata.Labels {
 		cfg.Config.Labels[k] = v
 	}
-	
+	if policyJSON, err := json.Marshal(runtimePolicyFromManifest(b.opts.Manifest)); err == nil {
+		cfg.Config.Labels[runtime.PolicyLabel] = string(policyJSON)
+	}
+
 	img, err = mutate.Config(img, cfg.Config)
 	if err != nil {
 		return nil, fmt.Errorf("mutating image config: %w", err)
@@ -221,4 +262,149 @@ func (b *Builder) Build(ctx context.Context) (*Result, error) {
 		Tag:    b.opts.Tag,
 		Client: b.opts.Registry,
 	}, nil
+}
+
+// resolveOCXComponents fetches and resolves any OCX components declared in the
+// manifest. It returns nil when no components are declared.
+func (b *Builder) resolveOCXComponents(ctx context.Context) (*ocx.ResolvedSet, error) {
+	refs := b.opts.Manifest.Spec.OCX.Components
+	if len(refs) == 0 {
+		return nil, nil
+	}
+
+	sources := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		sources = append(sources, b.resolveOCXSource(ref))
+	}
+
+	fetcher := ocx.NewOCIFetcher(b.opts.Registry)
+	resolver := ocx.NewResolver(fetcher)
+
+	if b.opts.LogFn != nil {
+		b.opts.LogFn("Resolving OCX components: %v", sources)
+	}
+	resolved, err := resolver.Resolve(ctx, sources)
+	if err != nil {
+		return nil, err
+	}
+
+	return resolved, nil
+}
+
+func (b *Builder) resolveOCXSource(ref manifest.OCXComponentRef) string {
+	alias, rest, found := strings.Cut(ref.Source, "/")
+	if found {
+		if reg, ok := b.opts.Manifest.Spec.OCX.Registries[alias]; ok {
+			base := strings.TrimSuffix(reg.URL, "/") + "/" + rest
+			if strings.Contains(base, ":") {
+				return base
+			}
+			version := ref.Version
+			if version == "" {
+				version = "latest"
+			}
+			return fmt.Sprintf("%s:%s", base, version)
+		}
+	}
+
+	if ref.Version != "" && !strings.Contains(ref.Source, ":") {
+		return fmt.Sprintf("%s:%s", ref.Source, ref.Version)
+	}
+	return ref.Source
+}
+
+func (b *Builder) processOCXLayers(resolved *ocx.ResolvedSet) ([]v1.Layer, error) {
+	if resolved == nil {
+		return nil, nil
+	}
+
+	var layers []v1.Layer
+	for _, c := range resolved.Components {
+		root := ocxComponentRoot(c.Manifest.Type)
+		if root == "" {
+			continue
+		}
+		target := fmt.Sprintf("%s/%s", root, c.Manifest.Name)
+		if b.opts.LogFn != nil {
+			b.opts.LogFn("Adding OCX %s: %s", c.Manifest.Type, c.Manifest.Name)
+		}
+		layer, err := CreateLayerFromDir(c.StagingDir, target)
+		if err != nil {
+			return nil, fmt.Errorf("layer for OCX component %q: %w", c.Manifest.Name, err)
+		}
+		layers = append(layers, layer)
+	}
+	return layers, nil
+}
+
+func ocxComponentRoot(t ocx.ComponentType) string {
+	switch t {
+	case ocx.ComponentSkill:
+		return "/opt/agentbox/skills"
+	case ocx.ComponentPlugin:
+		return "/opt/agentbox/plugins"
+	case ocx.ComponentAgent:
+		return "/opt/agentbox/agents"
+	case ocx.ComponentCommand:
+		return "/opt/agentbox/commands"
+	case ocx.ComponentTool:
+		return "/opt/agentbox/tools"
+	case ocx.ComponentBundle, ocx.ComponentProfile:
+		return ""
+	}
+	return ""
+}
+
+// processArtifacts resolves all skills, plugins, and MCP servers declared in the
+// manifest and returns their layers.
+func (b *Builder) processArtifacts(ctx context.Context, store *registry.ArtifactStore) ([]v1.Layer, error) {
+	var layers []v1.Layer
+
+	for _, skill := range b.opts.Manifest.Spec.Skills {
+		if b.opts.LogFn != nil {
+			b.opts.LogFn("Adding skill: %s", skill.Name)
+		}
+		layer, err := artifactLayer(ctx, store, skill, "/opt/agentbox/skills")
+		if err != nil {
+			return nil, fmt.Errorf("skill %q: %w", skill.Name, err)
+		}
+		layers = append(layers, layer)
+	}
+
+	for _, plugin := range b.opts.Manifest.Spec.Plugins {
+		if b.opts.LogFn != nil {
+			b.opts.LogFn("Adding plugin: %s", plugin.Name)
+		}
+		layer, err := pluginLayer(ctx, store, plugin, "/opt/agentbox/plugins")
+		if err != nil {
+			return nil, fmt.Errorf("plugin %q: %w", plugin.Name, err)
+		}
+		layers = append(layers, layer)
+	}
+
+	for _, srv := range b.opts.Manifest.Spec.MCP.Servers {
+		if b.opts.LogFn != nil {
+			b.opts.LogFn("Adding MCP server: %s", srv.Name)
+		}
+		layer, err := mcpLayer(ctx, store, srv, "/opt/agentbox/mcp")
+		if err != nil {
+			return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
+		}
+		layers = append(layers, layer)
+	}
+
+	return layers, nil
+}
+
+func runtimePolicyFromManifest(m *manifest.Manifest) runtime.Policy {
+	netPolicy := network.FromManifest(m.Spec.Network)
+	gr := guardrails.FromManifest(m.Spec.Guardrails)
+
+	memBytes, _ := guardrails.ParseSize(gr.Resources.Memory)
+	return runtime.Policy{
+		NetworkFlags: netPolicy.RuntimeFlags(),
+		CPUs:         gr.Resources.CPU,
+		MemoryBytes:  memBytes,
+		PidsLimit:    int64(gr.Resources.Pids),
+	}
 }

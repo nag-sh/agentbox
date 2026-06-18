@@ -36,3 +36,8 @@ Thumbs.db
 # Build artifacts
 *.tar.gz
 *.oci
+
+# Local development artifacts
+.omo/
+library/plugins/
+

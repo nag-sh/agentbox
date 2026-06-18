@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,7 +10,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nag-sh/agentbox/pkg/builder"
+	"github.com/nag-sh/agentbox/pkg/guardrails"
 	"github.com/nag-sh/agentbox/pkg/manifest"
+	"github.com/nag-sh/agentbox/pkg/network"
 	"github.com/nag-sh/agentbox/pkg/registry"
 	"github.com/nag-sh/agentbox/pkg/runtime"
 )
@@ -44,6 +47,7 @@ be passed through from the host.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			imageRef := args[0]
+			var runManifest *manifest.Manifest
 
 			// Check if the argument is a YAML manifest
 			ext := filepath.Ext(imageRef)
@@ -56,6 +60,7 @@ be passed through from the host.`,
 				if err != nil {
 					return fmt.Errorf("loading manifest: %w", err)
 				}
+				runManifest = m
 				
 				baseDir := filepath.Dir(manifestFile)
 				manifest.ResolveLocalPaths(m, baseDir)
@@ -196,6 +201,25 @@ be passed through from the host.`,
 				ExtraArgs: make([]string, 0),
 			}
 
+			if runManifest != nil {
+				netPolicy := network.FromManifest(runManifest.Spec.Network)
+				opts.NetworkFlags = netPolicy.RuntimeFlags()
+				gr := guardrails.FromManifest(runManifest.Spec.Guardrails)
+				memBytes, err := guardrails.ParseSize(gr.Resources.Memory)
+				if err != nil {
+					memBytes = 0
+				}
+				opts.ResourceLimits = &runtime.ResourceLimits{
+					CPUs:        gr.Resources.CPU,
+					MemoryBytes: memBytes,
+					PidsLimit:   int64(gr.Resources.Pids),
+				}
+			} else {
+				if info, err := rt.Inspect(cmd.Context(), imageRef); err == nil && info.Labels != nil {
+					applyRuntimePolicyFromLabel(&opts, info.Labels[runtime.PolicyLabel])
+				}
+			}
+
 			// Add env files as extra args to the runtime
 			for _, ef := range envFiles {
 				// Resolve path so it works regardless of working directory
@@ -221,6 +245,22 @@ be passed through from the host.`,
 	cmd.Flags().StringVar(&name, "name", "", "Container name")
 
 	return cmd
+}
+
+func applyRuntimePolicyFromLabel(opts *runtime.RunOptions, label string) {
+	if label == "" {
+		return
+	}
+	var policy runtime.Policy
+	if err := json.Unmarshal([]byte(label), &policy); err != nil {
+		return
+	}
+	opts.NetworkFlags = policy.NetworkFlags
+	opts.ResourceLimits = &runtime.ResourceLimits{
+		CPUs:        policy.CPUs,
+		MemoryBytes: policy.MemoryBytes,
+		PidsLimit:   policy.PidsLimit,
+	}
 }
 
 // parseEnvVar splits a KEY=VALUE string. If no = is present, the value

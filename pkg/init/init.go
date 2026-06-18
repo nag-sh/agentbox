@@ -25,12 +25,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/charmbracelet/log"
+	"gopkg.in/yaml.v3"
+
+	"github.com/nag-sh/agentbox/pkg/guardrails"
+	"github.com/nag-sh/agentbox/pkg/manifest"
+	"github.com/nag-sh/agentbox/pkg/network"
 )
 
 const (
@@ -43,6 +49,9 @@ const (
 
 	// guardrailConfigPath is the path to the guardrail configuration file.
 	guardrailConfigPath = configDir + "/guardrails.yaml"
+
+	// networkConfigPath is the path to the network policy configuration file.
+	networkConfigPath = configDir + "/network.yaml"
 
 	// defaultHealthTimeout is the maximum time to wait for all MCP servers
 	// to pass their health checks before aborting startup.
@@ -75,11 +84,11 @@ type RuntimeConfig struct {
 
 	// HealthTimeout overrides the default timeout for MCP server health checks.
 	// If zero, defaultHealthTimeout is used.
-	HealthTimeout time.Duration `yaml:"health_timeout"`
+	HealthTimeout manifest.Duration `yaml:"health_timeout"`
 
 	// ShutdownTimeout overrides the default graceful shutdown timeout.
 	// If zero, defaultShutdownTimeout is used.
-	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+	ShutdownTimeout manifest.Duration `yaml:"shutdown_timeout"`
 }
 
 // HarnessConfig describes the AI agent harness process that agentbox-init
@@ -126,10 +135,10 @@ type HealthCheckConfig struct {
 	Command []string `yaml:"command"`
 
 	// Interval is the time between health checks.
-	Interval time.Duration `yaml:"interval"`
+	Interval manifest.Duration `yaml:"interval"`
 
 	// Timeout is the maximum time for a single health check.
-	Timeout time.Duration `yaml:"timeout"`
+	Timeout manifest.Duration `yaml:"timeout"`
 
 	// Retries is the number of consecutive failures before unhealthy.
 	Retries int `yaml:"retries"`
@@ -172,6 +181,7 @@ type Init struct {
 	config     *RuntimeConfig
 	supervisor *Supervisor
 	logger     *log.Logger
+	guardrails *guardrails.Engine
 }
 
 // New creates a new Init instance with the given logger.
@@ -232,7 +242,7 @@ func (init_ *Init) Run(ctx context.Context) error {
 	}
 
 	// Step 9: Wait for MCP server health checks.
-	healthTimeout := config.HealthTimeout
+	healthTimeout := config.HealthTimeout.Duration
 	if healthTimeout == 0 {
 		healthTimeout = defaultHealthTimeout
 	}
@@ -262,8 +272,8 @@ func (init_ *Init) setupSignalHandling(cancel context.CancelFunc) {
 		// Forward signal to supervisor if running.
 		if init_.supervisor != nil {
 			shutdownTimeout := defaultShutdownTimeout
-			if init_.config != nil && init_.config.ShutdownTimeout > 0 {
-				shutdownTimeout = init_.config.ShutdownTimeout
+			if init_.config != nil && init_.config.ShutdownTimeout.Duration > 0 {
+				shutdownTimeout = init_.config.ShutdownTimeout.Duration
 			}
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 			defer shutdownCancel()
@@ -305,11 +315,11 @@ func (init_ *Init) loadRuntimeConfig() (*RuntimeConfig, error) {
 // parseRuntimeConfig parses YAML data into a RuntimeConfig.
 // This is extracted for testability.
 func parseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
-	// Note: In production this would use gopkg.in/yaml.v3.
-	// For now we return a placeholder to keep the import list minimal.
-	// TODO: Add yaml.v3 dependency and implement proper parsing.
-	_ = data
-	return &RuntimeConfig{}, fmt.Errorf("YAML parsing not yet implemented — add gopkg.in/yaml.v3 dependency")
+	var cfg RuntimeConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing runtime config YAML: %w", err)
+	}
+	return &cfg, nil
 }
 
 // initGuardrails reads the guardrail configuration and initializes the
@@ -317,30 +327,87 @@ func parseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 func (init_ *Init) initGuardrails() error {
 	init_.logger.Debug("loading guardrail config", "path", guardrailConfigPath)
 
-	if _, err := os.Stat(guardrailConfigPath); os.IsNotExist(err) {
-		init_.logger.Info("no guardrail config found, skipping")
-		return nil
+	data, err := os.ReadFile(guardrailConfigPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			init_.logger.Info("no guardrail config found, skipping")
+			return nil
+		}
+		return fmt.Errorf("reading %s: %w", guardrailConfigPath, err)
 	}
 
-	// TODO: Initialize guardrail engine from config.
+	var grConfig guardrails.GuardrailConfig
+	if err := yaml.Unmarshal(data, &grConfig); err != nil {
+		return fmt.Errorf("parsing %s: %w", guardrailConfigPath, err)
+	}
+
+	engine := guardrails.NewEngine(grConfig)
+	if err := engine.ApplyResourceLimits(); err != nil {
+		return fmt.Errorf("applying resource limits: %w", err)
+	}
+
+	init_.guardrails = engine
 	init_.logger.Info("guardrail engine initialized")
 	return nil
 }
 
 // applyNetworkPolicies applies iptables rules based on the network policy
-// configuration. If DenyAll is true, all outbound traffic is blocked by
-// default and only AllowedHosts/AllowedPorts are permitted.
+// configuration loaded from network.yaml.
 func (init_ *Init) applyNetworkPolicies(ctx context.Context) error {
-	if init_.config.Network.DenyAll || len(init_.config.Network.AllowedHosts) > 0 {
-		init_.logger.Info("applying network policies",
-			"deny_all", init_.config.Network.DenyAll,
-			"allowed_hosts", len(init_.config.Network.AllowedHosts),
-			"allowed_ports", len(init_.config.Network.AllowedPorts),
-		)
-		// TODO: Apply iptables rules via exec.
-		// For now, log the intent.
-	} else {
-		init_.logger.Debug("no network policies to apply")
+	policy, err := init_.loadNetworkPolicy()
+	if err != nil {
+		return fmt.Errorf("loading network policy: %w", err)
+	}
+	if policy == nil {
+		init_.logger.Debug("no network policy to apply")
+		return nil
+	}
+
+	if err := policy.Validate(); err != nil {
+		return fmt.Errorf("invalid network policy: %w", err)
+	}
+
+	rules, err := policy.GenerateIPTables()
+	if err != nil {
+		return fmt.Errorf("generating iptables rules: %w", err)
+	}
+
+	if len(rules) == 0 {
+		return nil
+	}
+
+	init_.logger.Info("applying network policies", "rules", len(rules))
+	return applyIPTablesRules(ctx, rules)
+}
+
+// loadNetworkPolicy reads the network policy from disk if it exists.
+func (init_ *Init) loadNetworkPolicy() (*network.NetworkPolicy, error) {
+	data, err := os.ReadFile(networkConfigPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", networkConfigPath, err)
+	}
+
+	var policy network.NetworkPolicy
+	if err := yaml.Unmarshal(data, &policy); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", networkConfigPath, err)
+	}
+	return &policy, nil
+}
+
+// applyIPTablesRules executes the supplied iptables command strings.
+func applyIPTablesRules(ctx context.Context, rules []string) error {
+	for _, rule := range rules {
+		args := strings.Fields(rule)
+		if len(args) == 0 {
+			continue
+		}
+		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("applying rule %q: %w", rule, err)
+		}
 	}
 	return nil
 }
@@ -418,8 +485,8 @@ func (init_ *Init) startMCPServers(ctx context.Context) error {
 		if mcpCfg.HealthCheck != nil {
 			proc.HealthCheck = &HealthCheck{
 				Command:  mcpCfg.HealthCheck.Command,
-				Interval: mcpCfg.HealthCheck.Interval,
-				Timeout:  mcpCfg.HealthCheck.Timeout,
+				Interval: mcpCfg.HealthCheck.Interval.Duration,
+				Timeout:  mcpCfg.HealthCheck.Timeout.Duration,
 				Retries:  mcpCfg.HealthCheck.Retries,
 			}
 		}

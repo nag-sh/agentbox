@@ -61,15 +61,15 @@ spec:
       deny:
         - "sudo *"
     filesystem:
-      readWrite:
+      writable:
         - "/workspace"
-      readOnly:
+      readable:
         - "/usr/local/bin"
     network:
       egress:
-        allowDomains:
-          - "*.github.com"
-          - "api.moonshot.cn" # Allow Kimi API access
+        allow:
+          - host: "*.github.com"
+          - host: "api.moonshot.cn" # Allow Kimi API access
 
   # Tools and harness permissions
   tools:
